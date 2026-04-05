@@ -26,23 +26,29 @@ class Application:
     """
     Main entry point for a synchronous pgwidgets application.
 
-    Creates a WebSocket server for widget commands and an HTTP server
-    to serve the JS/CSS assets.  Call run() to block on the event loop.
+    Creates a WebSocket server for widget commands and optionally an HTTP
+    server to serve the JS/CSS assets.  Call run() to block on the event loop.
 
     Parameters
     ----------
     ws_port : int
         WebSocket server port (default 9500).
     http_port : int
-        HTTP file server port (default 9501).
+        HTTP file server port (default 9501). Ignored if http_server=False.
     host : str
         Bind address (default 'localhost').
+    http_server : bool
+        Whether to start the built-in HTTP server (default True).
+        Set to False if you are serving the pgwidgets static files
+        from your own HTTP/HTTPS server (e.g. Flask, FastAPI, nginx).
     """
 
-    def __init__(self, ws_port=9500, http_port=9501, host="localhost"):
+    def __init__(self, ws_port=9500, http_port=9501, host="localhost",
+                 http_server=True):
         self._host = host
         self._ws_port = ws_port
         self._http_port = http_port
+        self._use_http_server = http_server
 
         self._next_id = 1
         self._next_wid = 1
@@ -56,16 +62,26 @@ class Application:
         self._loop = None
         self._connected = threading.Event()
 
+        self._loop = None
+        self._thread = None
+
         # build widget classes
         self._widget_classes = build_all_widget_classes()
 
-        # start servers in background
+    def start(self):
+        """Start the WebSocket server (and HTTP server if enabled).
+
+        Call this after construction and any customisation.  Subclasses
+        can override to add extra setup before or after the servers start.
+        """
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
 
-        # start HTTP server
-        self._start_http_server()
+        if self._use_http_server:
+            self._start_http_server()
+            print(f"Open {self.url} in a browser to connect.")
+        print(f"WebSocket on ws://{self._host}:{self._ws_port}")
 
     def _run_loop(self):
         asyncio.set_event_loop(self._loop)
@@ -119,8 +135,22 @@ class Application:
 
     @property
     def url(self):
-        """URL to open in a browser to connect."""
-        return f"http://{self._host}:{self._http_port}/"
+        """URL to open in a browser to connect (built-in server only)."""
+        if self._use_http_server:
+            return f"http://{self._host}:{self._http_port}/"
+        return None
+
+    @property
+    def static_path(self):
+        """Path to the pgwidgets static files directory.
+        Useful when serving files from your own HTTP server."""
+        return get_static_path()
+
+    @property
+    def remote_html(self):
+        """Path to the remote.html connector page.
+        Useful when serving from your own HTTP server."""
+        return get_remote_html()
 
     # -- Message handling --
 
@@ -307,8 +337,6 @@ class Application:
 
     def run(self):
         """Block forever, processing callbacks. Ctrl-C to exit."""
-        print(f"Open {self.url} in a browser to connect.")
-        print(f"WebSocket on ws://{self._host}:{self._ws_port}")
         try:
             while True:
                 import time

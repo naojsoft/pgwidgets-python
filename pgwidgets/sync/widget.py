@@ -22,18 +22,20 @@ class Widget:
         resolved = [self._app._resolve_arg(a) for a in args]
         return self._app._call(self._wid, method, *resolved)
 
-    def on(self, action, handler):
-        """Register a callback. The handler receives (*args) — no widget arg."""
+    def on(self, action, handler, *extra_args, **extra_kwargs):
+        """Register a callback. The handler receives
+        (*callback_args, *extra_args, **extra_kwargs) — no widget arg."""
         def wrapper(wid, *args):
             resolved = [self._app._resolve_return(a) for a in args]
-            handler(*resolved)
+            handler(*resolved, *extra_args, **extra_kwargs)
         self._app._listen(self._wid, action, wrapper)
 
-    def add_callback(self, action, handler):
-        """Register a callback. The handler receives (widget, *args)."""
+    def add_callback(self, action, handler, *extra_args, **extra_kwargs):
+        """Register a callback. The handler receives
+        (widget, *callback_args, *extra_args, **extra_kwargs)."""
         def wrapper(wid, *args):
             resolved = [self._app._resolve_return(a) for a in args]
-            handler(self, *resolved)
+            handler(self, *resolved, *extra_args, **extra_kwargs)
         self._app._listen(self._wid, action, wrapper)
 
     # -- Common Widget methods --

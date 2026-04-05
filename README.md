@@ -19,6 +19,7 @@ This will also install `pgwidgets-js` (the JavaScript assets) and
 from pgwidgets.sync import Application
 
 app = Application()
+app.start()
 W = app.get_widgets()
 
 app.wait_for_connection()
@@ -50,6 +51,7 @@ Both APIs provide the same widget classes and methods.
 ```python
 from pgwidgets.sync import Application
 app = Application()
+app.start()
 W = app.get_widgets()
 
 btn = W.Button("Click")      # blocking call
@@ -60,6 +62,7 @@ btn.set_text("New text")     # blocking call
 ```python
 from pgwidgets.async_ import Application
 app = Application()
+await app.start()
 W = app.get_widgets()
 
 btn = await W.Button("Click")    # awaitable

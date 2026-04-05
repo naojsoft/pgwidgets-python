@@ -8,6 +8,7 @@ Run this script and open the URL it prints in a browser.
 from pgwidgets.sync import Application
 
 app = Application()
+app.start()
 W = app.get_widgets()
 
 print("Waiting for browser connection...")

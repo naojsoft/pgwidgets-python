@@ -71,8 +71,9 @@ async def main():
 
         print("UI built. Interact with the browser window.")
 
+    await app.start()
     asyncio.ensure_future(build_ui())
-    await app.run()
+    await asyncio.Future()  # run forever
 
 
 if __name__ == "__main__":

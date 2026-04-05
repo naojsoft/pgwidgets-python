@@ -28,8 +28,8 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ejeschke/pgwidgets-python"
-Repository = "https://github.com/ejeschke/pgwidgets-python"
+Homepage = "https://github.com/naojsoft/pgwidgets-python"
+Repository = "https://github.com/naojsoft/pgwidgets-python"
 
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"

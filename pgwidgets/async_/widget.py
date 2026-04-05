@@ -22,22 +22,24 @@ class Widget:
         resolved = [self._app._resolve_arg(a) for a in args]
         return await self._app._call(self._wid, method, *resolved)
 
-    async def on(self, action, handler):
-        """Register a callback. The handler receives (*args) — no widget arg.
+    async def on(self, action, handler, *extra_args, **extra_kwargs):
+        """Register a callback. The handler receives
+        (*callback_args, *extra_args, **extra_kwargs) — no widget arg.
         Handler can be sync or async."""
         async def wrapper(wid, *args):
             resolved = [self._app._resolve_return(a) for a in args]
-            result = handler(*resolved)
+            result = handler(*resolved, *extra_args, **extra_kwargs)
             if hasattr(result, "__await__"):
                 await result
         await self._app._listen(self._wid, action, wrapper)
 
-    async def add_callback(self, action, handler):
-        """Register a callback. The handler receives (widget, *args).
+    async def add_callback(self, action, handler, *extra_args, **extra_kwargs):
+        """Register a callback. The handler receives
+        (widget, *callback_args, *extra_args, **extra_kwargs).
         Handler can be sync or async."""
         async def wrapper(wid, *args):
             resolved = [self._app._resolve_return(a) for a in args]
-            result = handler(self, *resolved)
+            result = handler(self, *resolved, *extra_args, **extra_kwargs)
             if hasattr(result, "__await__"):
                 await result
         await self._app._listen(self._wid, action, wrapper)

@@ -30,15 +30,21 @@ class Application:
     ws_port : int
         WebSocket server port (default 9500).
     http_port : int
-        HTTP file server port (default 9501).
+        HTTP file server port (default 9501). Ignored if http_server=False.
     host : str
         Bind address (default 'localhost').
+    http_server : bool
+        Whether to start the built-in HTTP server (default True).
+        Set to False if you are serving the pgwidgets static files
+        from your own HTTP/HTTPS server (e.g. FastAPI, aiohttp, nginx).
     """
 
-    def __init__(self, ws_port=9500, http_port=9501, host="localhost"):
+    def __init__(self, ws_port=9500, http_port=9501, host="localhost",
+                 http_server=True):
         self._host = host
         self._ws_port = ws_port
         self._http_port = http_port
+        self._use_http_server = http_server
 
         self._next_id = 1
         self._next_wid = 1
@@ -53,7 +59,19 @@ class Application:
 
     @property
     def url(self):
-        return f"http://{self._host}:{self._http_port}/"
+        if self._use_http_server:
+            return f"http://{self._host}:{self._http_port}/"
+        return None
+
+    @property
+    def static_path(self):
+        """Path to the pgwidgets static files directory."""
+        return get_static_path()
+
+    @property
+    def remote_html(self):
+        """Path to the remote.html connector page."""
+        return get_remote_html()
 
     async def wait_for_connection(self):
         """Wait until a browser connects."""
@@ -258,15 +276,21 @@ class Application:
 
     # -- Main loop --
 
-    async def run(self):
-        """Start servers and run forever."""
-        print(f"Open {self.url} in a browser to connect.")
+    async def start(self):
+        """Start the WebSocket server (and HTTP server if enabled).
+
+        Call this after construction and any customisation.  Subclasses
+        can override to add extra setup before or after the servers start.
+        """
+        if self._use_http_server:
+            print(f"Open {self.url} in a browser to connect.")
+            asyncio.ensure_future(self._start_http_server())
         print(f"WebSocket on ws://{self._host}:{self._ws_port}")
 
-        # start HTTP server in background
-        asyncio.ensure_future(self._start_http_server())
+        self._ws_server = await websockets.serve(
+            self._ws_handler, self._host, self._ws_port)
 
-        # start WebSocket server
-        async with websockets.serve(self._ws_handler, self._host,
-                                    self._ws_port):
-            await asyncio.Future()  # run forever
+    async def run(self):
+        """Start servers and run forever."""
+        await self.start()
+        await asyncio.Future()  # run forever
