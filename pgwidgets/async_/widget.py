@@ -44,6 +44,14 @@ class Widget:
                 await result
         await self._app._listen(self._wid, action, wrapper)
 
+    async def destroy(self):
+        """Destroy this widget: tear it down on the JS side and drop it
+        from the Python-side registry so it can be garbage-collected."""
+        try:
+            await self._call("destroy")
+        finally:
+            self._app._widget_map.pop(self._wid, None)
+
     def __repr__(self):
         return f"<{self._js_class} wid={self._wid}>"
 
@@ -87,6 +95,10 @@ def build_widget_class(js_class, defn):
     base_methods = CONTAINER_METHODS if defn.get("base") == "container" \
         else WIDGET_METHODS
     for method_name, param_names in base_methods.items():
+        # destroy() is defined explicitly on the Widget base class so it
+        # can also drop the wrapper from the Python-side registry.
+        if method_name == "destroy":
+            continue
         attrs[method_name] = _make_method(method_name, param_names)
 
     # Per-widget methods override base methods with the same name.
