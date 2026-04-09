@@ -246,6 +246,11 @@ class Application:
 
         return ns
 
+    async def make_timer(self, duration=0):
+        """Create a Timer (non-visual) and return its widget wrapper."""
+        ns = self.get_widgets()
+        return await ns.Timer(duration=duration)
+
     # -- HTTP server (using asyncio) --
 
     async def _start_http_server(self):

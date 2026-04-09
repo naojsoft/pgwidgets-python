@@ -333,6 +333,11 @@ class Application:
 
         return ns
 
+    def make_timer(self, duration=0):
+        """Create a Timer (non-visual) and return its widget wrapper."""
+        ns = self.get_widgets()
+        return ns.Timer(duration=duration)
+
     # -- Main loop --
 
     def run(self):
