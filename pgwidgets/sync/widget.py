@@ -2,6 +2,10 @@
 Synchronous base Widget class and widget class factory.
 """
 
+import base64
+import mimetypes
+import os
+
 from pgwidgets.defs import WIDGETS, WIDGET_METHODS, CONTAINER_METHODS
 
 
@@ -42,6 +46,23 @@ class Widget:
             resolved = [self._app._resolve_return(a) for a in args]
             handler(self, *resolved, *extra_args, **extra_kwargs)
         self._app._listen(self._wid, action, wrapper)
+
+    @staticmethod
+    def _to_data_uri(path):
+        """Convert a file path to a data URI."""
+        mime, _ = mimetypes.guess_type(path)
+        if mime is None:
+            mime = 'application/octet-stream'
+        with open(path, 'rb') as f:
+            data = base64.b64encode(f.read()).decode('ascii')
+        return f"data:{mime};base64,{data}"
+
+    def add_cursor(self, name, url, hotspot_x, hotspot_y, size=None):
+        """Register a named custom cursor. If url is a local file path
+        it is read and converted to a data URI before sending."""
+        if os.path.isfile(url):
+            url = self._to_data_uri(url)
+        return self._call("add_cursor", name, url, hotspot_x, hotspot_y, size)
 
     def destroy(self):
         """Destroy this widget: tear it down on the JS side and drop it
@@ -97,7 +118,7 @@ def build_widget_class(js_class, defn):
     for method_name, param_names in base_methods.items():
         # destroy() is defined explicitly on the Widget base class so it
         # can also drop the wrapper from the Python-side registry.
-        if method_name == "destroy":
+        if method_name in ("destroy", "add_cursor"):
             continue
         attrs[method_name] = _make_method(method_name, param_names)
 
