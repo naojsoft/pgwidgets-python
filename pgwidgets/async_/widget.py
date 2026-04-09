@@ -17,6 +17,11 @@ class Widget:
     def wid(self):
         return self._wid
 
+    @property
+    def app(self):
+        """The Application this widget belongs to."""
+        return self._app
+
     async def _call(self, method, *args):
         """Call a method on the JS widget."""
         resolved = [self._app._resolve_arg(a) for a in args]

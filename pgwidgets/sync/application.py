@@ -43,7 +43,7 @@ class Application:
         from your own HTTP/HTTPS server (e.g. Flask, FastAPI, nginx).
     """
 
-    def __init__(self, ws_port=9500, http_port=9501, host="localhost",
+    def __init__(self, ws_port=9500, http_port=9501, host="127.0.0.1",
                  http_server=True):
         self._host = host
         self._ws_port = ws_port
