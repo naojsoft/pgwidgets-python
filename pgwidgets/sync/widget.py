@@ -38,51 +38,33 @@ class Widget:
             handler(self, *resolved, *extra_args, **extra_kwargs)
         self._app._listen(self._wid, action, wrapper)
 
-    # -- Common Widget methods --
-
-    def get_element(self):
-        return self._call("get_element")
-
-    def set_border_width(self, width):
-        self._call("set_border_width", width)
-
-    def set_border_color(self, color):
-        self._call("set_border_color", color)
-
-    def resize(self, width, height):
-        self._call("resize", width, height)
-
-    def get_size(self):
-        return self._call("get_size")
-
-    def set_padding(self, padding):
-        self._call("set_padding", padding)
-
-    def set_font(self, font, size=None, weight=None, style=None):
-        self._call("set_font", font, size, weight, style)
-
-    def set_enabled(self, tf):
-        self._call("set_enabled", tf)
-
-    def get_enabled(self):
-        return self._call("get_enabled")
-
-    def show(self):
-        self._call("show")
-
-    def hide(self):
-        self._call("hide")
-
-    def is_visible(self):
-        return self._call("is_visible")
-
     def __repr__(self):
         return f"<{self._js_class} wid={self._wid}>"
 
 
 def _make_method(method_name, param_names):
-    """Create a method that calls through to the JS widget."""
-    def method(self, *args):
+    """Create a method that calls through to the JS widget.
+
+    The generated method accepts positional args and keyword args matching
+    the declared parameter names in param_names. Missing trailing args are
+    simply omitted — the JS side handles its own default values.
+    """
+    def method(self, *args, **kwargs):
+        if kwargs:
+            # Remap kwargs to positional order defined by param_names.
+            merged = list(args)
+            for i, name in enumerate(param_names):
+                if i < len(merged):
+                    continue
+                if name in kwargs:
+                    merged.append(kwargs.pop(name))
+                else:
+                    break
+            if kwargs:
+                unknown = ", ".join(sorted(kwargs))
+                raise TypeError(
+                    f"{method_name}() got unexpected keyword arguments: {unknown}")
+            args = tuple(merged)
         return self._call(method_name, *args)
     method.__name__ = method_name
     method.__qualname__ = f"Widget.{method_name}"
@@ -95,7 +77,14 @@ def build_widget_class(js_class, defn):
     """Build a synchronous Widget subclass from a definition."""
     attrs = {}
 
-    # Add specific methods from the definition
+    # Base methods (WIDGET_METHODS, plus get_children for containers).
+    # Applied first so per-widget methods can override.
+    base_methods = CONTAINER_METHODS if defn.get("base") == "container" \
+        else WIDGET_METHODS
+    for method_name, param_names in base_methods.items():
+        attrs[method_name] = _make_method(method_name, param_names)
+
+    # Per-widget methods override base methods with the same name.
     for method_name, param_names in defn.get("methods", {}).items():
         attrs[method_name] = _make_method(method_name, param_names)
 

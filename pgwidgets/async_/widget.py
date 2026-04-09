@@ -2,7 +2,7 @@
 Asynchronous base Widget class and widget class factory.
 """
 
-from pgwidgets.defs import WIDGETS
+from pgwidgets.defs import WIDGETS, WIDGET_METHODS, CONTAINER_METHODS
 
 
 class Widget:
@@ -44,51 +44,32 @@ class Widget:
                 await result
         await self._app._listen(self._wid, action, wrapper)
 
-    # -- Common Widget methods --
-
-    async def get_element(self):
-        return await self._call("get_element")
-
-    async def set_border_width(self, width):
-        await self._call("set_border_width", width)
-
-    async def set_border_color(self, color):
-        await self._call("set_border_color", color)
-
-    async def resize(self, width, height):
-        await self._call("resize", width, height)
-
-    async def get_size(self):
-        return await self._call("get_size")
-
-    async def set_padding(self, padding):
-        await self._call("set_padding", padding)
-
-    async def set_font(self, font, size=None, weight=None, style=None):
-        await self._call("set_font", font, size, weight, style)
-
-    async def set_enabled(self, tf):
-        await self._call("set_enabled", tf)
-
-    async def get_enabled(self):
-        return await self._call("get_enabled")
-
-    async def show(self):
-        await self._call("show")
-
-    async def hide(self):
-        await self._call("hide")
-
-    async def is_visible(self):
-        return await self._call("is_visible")
-
     def __repr__(self):
         return f"<{self._js_class} wid={self._wid}>"
 
 
 def _make_method(method_name, param_names):
-    """Create an async method that calls through to the JS widget."""
-    async def method(self, *args):
+    """Create an async method that calls through to the JS widget.
+
+    The generated method accepts positional args and keyword args matching
+    the declared parameter names in param_names. Missing trailing args are
+    simply omitted — the JS side handles its own default values.
+    """
+    async def method(self, *args, **kwargs):
+        if kwargs:
+            merged = list(args)
+            for i, name in enumerate(param_names):
+                if i < len(merged):
+                    continue
+                if name in kwargs:
+                    merged.append(kwargs.pop(name))
+                else:
+                    break
+            if kwargs:
+                unknown = ", ".join(sorted(kwargs))
+                raise TypeError(
+                    f"{method_name}() got unexpected keyword arguments: {unknown}")
+            args = tuple(merged)
         return await self._call(method_name, *args)
     method.__name__ = method_name
     method.__qualname__ = f"Widget.{method_name}"
@@ -100,6 +81,15 @@ def _make_method(method_name, param_names):
 def build_widget_class(js_class, defn):
     """Build an async Widget subclass from a definition."""
     attrs = {}
+
+    # Base methods (WIDGET_METHODS, plus get_children for containers).
+    # Applied first so per-widget methods can override.
+    base_methods = CONTAINER_METHODS if defn.get("base") == "container" \
+        else WIDGET_METHODS
+    for method_name, param_names in base_methods.items():
+        attrs[method_name] = _make_method(method_name, param_names)
+
+    # Per-widget methods override base methods with the same name.
     for method_name, param_names in defn.get("methods", {}).items():
         attrs[method_name] = _make_method(method_name, param_names)
 
