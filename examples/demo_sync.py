@@ -9,30 +9,30 @@ from pgwidgets.sync import Application
 
 app = Application()
 app.start()
-W = app.get_widgets()
+Widgets = app.get_widgets()
 
 print("Waiting for browser connection...")
 app.wait_for_connection()
 print("Connected!")
 
 # Build the UI
-top = W.TopLevel(title="Sync Demo", resizable=True)
+top = Widgets.TopLevel(title="Sync Demo", resizable=True)
 top.resize(400, 300)
 
-vbox = W.VBox(spacing=8, padding=10)
+vbox = Widgets.VBox(spacing=8, padding=10)
 
-status = W.Label("Click a button!")
+status = Widgets.Label("Click a button!")
 
-hbox = W.HBox(spacing=6)
-btn_hello = W.Button("Hello")
-btn_world = W.Button("World")
-btn_clear = W.Button("Clear")
+hbox = Widgets.HBox(spacing=6)
+btn_hello = Widgets.Button("Hello")
+btn_world = Widgets.Button("World")
+btn_clear = Widgets.Button("Clear")
 hbox.add_widget(btn_hello, 0)
 hbox.add_widget(btn_world, 0)
 hbox.add_widget(btn_clear, 0)
 
-entry = W.TextEntry(text="Type here", linehistory=5)
-slider = W.Slider(min=0, max=100, value=50, track=True)
+entry = Widgets.TextEntry(text="Type here", linehistory=5)
+slider = Widgets.Slider(min=0, max=100, value=50, track=True)
 
 vbox.add_widget(hbox, 0)
 vbox.add_widget(entry, 0)

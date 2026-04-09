@@ -11,7 +11,7 @@ from pgwidgets.async_ import Application
 
 async def main():
     app = Application()
-    W = app.get_widgets()
+    Widgets = app.get_widgets()
 
     # Start servers in background, then build UI
     async def build_ui():
@@ -20,23 +20,23 @@ async def main():
         print("Connected!")
 
         # Build the UI
-        top = await W.TopLevel(title="Async Demo", resizable=True)
+        top = await Widgets.TopLevel(title="Async Demo", resizable=True)
         await top.resize(400, 300)
 
-        vbox = await W.VBox(spacing=8, padding=10)
+        vbox = await Widgets.VBox(spacing=8, padding=10)
 
-        status = await W.Label("Click a button!")
+        status = await Widgets.Label("Click a button!")
 
-        hbox = await W.HBox(spacing=6)
-        btn_hello = await W.Button("Hello")
-        btn_world = await W.Button("World")
-        btn_clear = await W.Button("Clear")
+        hbox = await Widgets.HBox(spacing=6)
+        btn_hello = await Widgets.Button("Hello")
+        btn_world = await Widgets.Button("World")
+        btn_clear = await Widgets.Button("Clear")
         await hbox.add_widget(btn_hello, 0)
         await hbox.add_widget(btn_world, 0)
         await hbox.add_widget(btn_clear, 0)
 
-        entry = await W.TextEntry(text="Type here", linehistory=5)
-        slider = await W.Slider(min=0, max=100, value=50, track=True)
+        entry = await Widgets.TextEntry(text="Type here", linehistory=5)
+        slider = await Widgets.Slider(min=0, max=100, value=50, track=True)
 
         await vbox.add_widget(hbox, 0)
         await vbox.add_widget(entry, 0)
