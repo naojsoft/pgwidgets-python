@@ -26,8 +26,24 @@ class Widget:
         """The Application this widget belongs to."""
         return self._app
 
+    # Methods whose string arguments may be local file paths that need
+    # to be converted to data URIs before sending to the browser.
+    _FILE_ARG_METHODS = frozenset([
+        "set_icon", "set_image", "set_icon_gutter",
+    ])
+
+    @staticmethod
+    def _resolve_file_arg(val):
+        """If val is a string that refers to an existing file, convert
+        it to a data URI.  Otherwise return it unchanged."""
+        if isinstance(val, str) and os.path.isfile(val):
+            return Widget._to_data_uri(val)
+        return val
+
     def _call(self, method, *args):
         """Call a method on the JS widget."""
+        if method in self._FILE_ARG_METHODS:
+            args = tuple(self._resolve_file_arg(a) for a in args)
         resolved = [self._app._resolve_arg(a) for a in args]
         return self._app._call(self._wid, method, *resolved)
 
