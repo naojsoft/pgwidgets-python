@@ -6,6 +6,7 @@ factory via get_widgets().
 
 import asyncio
 import json
+import queue
 import threading
 import http.server
 import functools
@@ -41,14 +42,24 @@ class Application:
         Whether to start the built-in HTTP server (default True).
         Set to False if you are serving the pgwidgets static files
         from your own HTTP/HTTPS server (e.g. Flask, FastAPI, nginx).
+    thread_safe : bool
+        Callback threading model (default True).
+        If True, all widget callbacks are queued and dispatched
+        sequentially on the main thread inside run(). This is the
+        standard GUI-toolkit model (like Qt/GTK) — callbacks see a
+        consistent world and don't need locks.
+        If False, each callback fires on its own daemon thread,
+        allowing concurrent execution but requiring the caller to
+        manage thread safety for any shared state.
     """
 
     def __init__(self, ws_port=9500, http_port=9501, host="127.0.0.1",
-                 http_server=True):
+                 http_server=True, thread_safe=True):
         self._host = host
         self._ws_port = ws_port
         self._http_port = http_port
         self._use_http_server = http_server
+        self._thread_safe = thread_safe
 
         self._next_id = 1
         self._next_wid = 1
@@ -57,6 +68,7 @@ class Application:
         self._events = {}        # msg id -> threading.Event
         self._callbacks = {}     # "wid:action" -> handler fn
         self._widget_map = {}    # wid -> Widget instance
+        self._cb_queue = queue.Queue()  # for thread_safe mode
 
         self._ws = None
         self._loop = None
@@ -64,6 +76,7 @@ class Application:
 
         self._loop = None
         self._thread = None
+        self._initialized = False
 
         # build widget classes
         self._widget_classes = build_all_widget_classes()
@@ -94,6 +107,14 @@ class Application:
 
     async def _ws_handler(self, ws):
         self._ws = ws
+        if not self._initialized:
+            # First connection: reset the browser to a clean slate.
+            await ws.send(json.dumps({"type": "init", "id": 0}))
+            await ws.recv()  # wait for ack
+            self._next_wid = 1
+            self._widget_map.clear()
+            self._callbacks.clear()
+            self._initialized = True
         self._connected.set()
         try:
             async for message in ws:
@@ -176,11 +197,15 @@ class Application:
             key = f"{msg['wid']}:{msg['action']}"
             handler = self._callbacks.get(key)
             if handler:
-                threading.Thread(
-                    target=handler,
-                    args=(msg["wid"], *msg.get("args", [])),
-                    daemon=True
-                ).start()
+                cb_args = (msg["wid"], *msg.get("args", []))
+                if self._thread_safe:
+                    self._cb_queue.put((handler, cb_args, {}, None))
+                else:
+                    threading.Thread(
+                        target=handler,
+                        args=cb_args,
+                        daemon=True
+                    ).start()
 
     def _send(self, msg):
         """Send a message and block until the result arrives."""
@@ -333,6 +358,37 @@ class Application:
 
         return ns
 
+    def gui_do(self, func, *args, **kwargs):
+        """Schedule a function to run on the GUI thread. Returns
+        immediately without waiting for the result.
+
+        In thread_safe mode this queues the call. In multi-thread mode
+        this runs the function directly on the calling thread.
+        """
+        if self._thread_safe:
+            self._cb_queue.put((func, args, kwargs, None))
+        else:
+            func(*args, **kwargs)
+
+    def gui_call(self, func, *args, **kwargs):
+        """Schedule a function to run on the GUI thread and block until
+        it completes. Returns the function's return value.
+
+        In thread_safe mode this queues the call and waits. In
+        multi-thread mode this runs the function directly on the
+        calling thread and returns its result.
+        """
+        if self._thread_safe:
+            result_slot = {'value': None, 'error': None,
+                           'event': threading.Event()}
+            self._cb_queue.put((func, args, kwargs, result_slot))
+            result_slot['event'].wait()
+            if result_slot['error'] is not None:
+                raise result_slot['error']
+            return result_slot['value']
+        else:
+            return func(*args, **kwargs)
+
     def make_timer(self, duration=0):
         """Create a Timer (non-visual) and return its widget wrapper."""
         ns = self.get_widgets()
@@ -341,10 +397,44 @@ class Application:
     # -- Main loop --
 
     def run(self):
-        """Block forever, processing callbacks. Ctrl-C to exit."""
+        """Block forever, processing callbacks. Ctrl-C to exit.
+
+        In thread_safe mode (the default), callbacks are dispatched
+        sequentially on this thread.  In multi-thread mode, this method
+        simply sleeps while callbacks run on their own threads.
+        """
         try:
-            while True:
-                import time
-                time.sleep(1)
+            if self._thread_safe:
+                self._run_gui_loop()
+            else:
+                self._run_idle_loop()
         except KeyboardInterrupt:
             print("\nShutting down.")
+
+    def _run_gui_loop(self):
+        """Process the callback queue on the main thread."""
+        while True:
+            try:
+                handler, args, kwargs, result_slot = \
+                    self._cb_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                rv = handler(*args, **kwargs)
+                if result_slot is not None:
+                    result_slot['value'] = rv
+            except Exception as e:
+                if result_slot is not None:
+                    result_slot['error'] = e
+                else:
+                    import traceback
+                    traceback.print_exc()
+            finally:
+                if result_slot is not None:
+                    result_slot['event'].set()
+
+    def _run_idle_loop(self):
+        """Sleep forever — callbacks run on their own threads."""
+        import time
+        while True:
+            time.sleep(1)
