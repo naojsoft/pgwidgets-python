@@ -6,10 +6,12 @@ factory via get_widgets().
 
 import asyncio
 import json
+import mimetypes
 import queue
 import threading
 import http.server
 import functools
+from pathlib import Path
 
 import websockets
 
@@ -60,6 +62,8 @@ class Application:
         self._http_port = http_port
         self._use_http_server = http_server
         self._thread_safe = thread_safe
+
+        self._favicon_path = Path(get_static_path()) / "icons" / "pgicon.svg"
 
         self._next_id = 1
         self._next_wid = 1
@@ -126,6 +130,7 @@ class Application:
     def _start_http_server(self):
         static_path = str(get_static_path())
         remote_html = get_remote_html()
+        favicon_path = self._favicon_path
 
         class Handler(http.server.SimpleHTTPRequestHandler):
             def __init__(self, *args, **kwargs):
@@ -138,6 +143,18 @@ class Application:
                     self.send_header("Content-Type", "text/html")
                     self.end_headers()
                     self.wfile.write(remote_html.read_bytes())
+                    return
+                # serve the favicon
+                if self.path == "/favicon.svg" or self.path == "/favicon.ico":
+                    if favicon_path and favicon_path.is_file():
+                        mime, _ = mimetypes.guess_type(str(favicon_path))
+                        self.send_response(200)
+                        self.send_header("Content-Type",
+                                         mime or "image/svg+xml")
+                        self.end_headers()
+                        self.wfile.write(favicon_path.read_bytes())
+                    else:
+                        self.send_error(404)
                     return
                 super().do_GET()
 
@@ -172,6 +189,18 @@ class Application:
         """Path to the remote.html connector page.
         Useful when serving from your own HTTP server."""
         return get_remote_html()
+
+    def set_favicon(self, path):
+        """Set a custom favicon for the built-in HTTP server.
+
+        Call this before start() to override the default pgwidgets icon.
+
+        Parameters
+        ----------
+        path : str or Path
+            Path to an image file (SVG, PNG, ICO, etc.).
+        """
+        self._favicon_path = Path(path)
 
     # -- Message handling --
 
