@@ -10,14 +10,11 @@ from pgwidgets.async_ import Application
 
 
 async def main():
-    app = Application()
-    Widgets = app.get_widgets()
+    app = Application(max_sessions=4)
 
-    # Start servers in background, then build UI
-    async def build_ui():
-        print("Waiting for browser connection...")
-        await app.wait_for_connection()
-        print("Connected!")
+    @app.on_connect
+    async def on_session(session):
+        Widgets = session.get_widgets()
 
         # Build the UI
         top = await Widgets.TopLevel(title="Async Demo", resizable=True)
@@ -69,11 +66,9 @@ async def main():
         await entry.on("activated", on_entry)
         await slider.on("activated", on_slider)
 
-        print("UI built. Interact with the browser window.")
+        print(f"Session {session.id}: UI built.")
 
-    await app.start()
-    asyncio.ensure_future(build_ui())
-    await asyncio.Future()  # run forever
+    await app.run()
 
 
 if __name__ == "__main__":

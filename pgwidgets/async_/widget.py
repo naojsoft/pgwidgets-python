@@ -12,8 +12,8 @@ from pgwidgets.defs import WIDGETS, WIDGET_METHODS, CONTAINER_METHODS
 class Widget:
     """Base class for all async widget wrappers."""
 
-    def __init__(self, app, wid, js_class):
-        self._app = app
+    def __init__(self, session, wid, js_class):
+        self._session = session
         self._wid = wid
         self._js_class = js_class
 
@@ -22,9 +22,14 @@ class Widget:
         return self._wid
 
     @property
+    def session(self):
+        """The Session this widget belongs to."""
+        return self._session
+
+    @property
     def app(self):
         """The Application this widget belongs to."""
-        return self._app
+        return self._session.app
 
     # Methods whose string arguments may be local file paths that need
     # to be converted to data URIs before sending to the browser.
@@ -44,30 +49,30 @@ class Widget:
         """Call a method on the JS widget."""
         if method in self._FILE_ARG_METHODS:
             args = tuple(self._resolve_file_arg(a) for a in args)
-        resolved = [self._app._resolve_arg(a) for a in args]
-        return await self._app._call(self._wid, method, *resolved)
+        resolved = [self._session._resolve_arg(a) for a in args]
+        return await self._session._call(self._wid, method, *resolved)
 
     async def on(self, action, handler, *extra_args, **extra_kwargs):
         """Register a callback. The handler receives
         (*callback_args, *extra_args, **extra_kwargs) — no widget arg.
         Handler can be sync or async."""
         async def wrapper(wid, *args):
-            resolved = [self._app._resolve_return(a) for a in args]
+            resolved = [self._session._resolve_return(a) for a in args]
             result = handler(*resolved, *extra_args, **extra_kwargs)
             if hasattr(result, "__await__"):
                 await result
-        await self._app._listen(self._wid, action, wrapper)
+        await self._session._listen(self._wid, action, wrapper)
 
     async def add_callback(self, action, handler, *extra_args, **extra_kwargs):
         """Register a callback. The handler receives
         (widget, *callback_args, *extra_args, **extra_kwargs).
         Handler can be sync or async."""
         async def wrapper(wid, *args):
-            resolved = [self._app._resolve_return(a) for a in args]
+            resolved = [self._session._resolve_return(a) for a in args]
             result = handler(self, *resolved, *extra_args, **extra_kwargs)
             if hasattr(result, "__await__"):
                 await result
-        await self._app._listen(self._wid, action, wrapper)
+        await self._session._listen(self._wid, action, wrapper)
 
     @staticmethod
     def _to_data_uri(path):
@@ -92,7 +97,7 @@ class Widget:
         try:
             await self._call("destroy")
         finally:
-            self._app._widget_map.pop(self._wid, None)
+            self._session._widget_map.pop(self._wid, None)
 
     def __repr__(self):
         return f"<{self._js_class} wid={self._wid}>"
