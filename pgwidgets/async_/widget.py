@@ -54,7 +54,7 @@ class Widget:
 
     async def on(self, action, handler, *extra_args, **extra_kwargs):
         """Register a callback. The handler receives
-        (*callback_args, *extra_args, **extra_kwargs) — no widget arg.
+        ``(*callback_args, *extra_args, **extra_kwargs)`` -- no widget arg.
         Handler can be sync or async."""
         async def wrapper(wid, *args):
             resolved = [self._session._resolve_return(a) for a in args]
@@ -65,7 +65,7 @@ class Widget:
 
     async def add_callback(self, action, handler, *extra_args, **extra_kwargs):
         """Register a callback. The handler receives
-        (widget, *callback_args, *extra_args, **extra_kwargs).
+        ``(widget, *callback_args, *extra_args, **extra_kwargs)``.
         Handler can be sync or async."""
         async def wrapper(wid, *args):
             resolved = [self._session._resolve_return(a) for a in args]
