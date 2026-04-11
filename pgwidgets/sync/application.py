@@ -152,19 +152,24 @@ class Session:
 
         elif msg_type == "callback":
             # If the payload has a transfer_id, stash the metadata —
-            # the real callback fires after all chunks arrive.
+            # the end callback fires after all chunks arrive.
             if (msg.get("args")
                     and isinstance(msg["args"][0], dict)
                     and "transfer_id" in msg["args"][0]):
                 payload = msg["args"][0]
                 tid = payload["transfer_id"]
+                action = msg["action"]
                 self._transfers[tid] = {
                     "wid": msg["wid"],
-                    "action": msg["action"],
+                    "action": action,
                     "payload": payload,
                     "file_data": {},   # file_index -> [chunk, ...]
                     "num_chunks": {},  # file_index -> expected count
                 }
+                # Fire a start callback with metadata (no file data).
+                if action == "drop-end":
+                    self._dispatch_callback(
+                        msg["wid"], "drop-start", payload)
                 return
 
             self._dispatch_callback(
@@ -216,7 +221,7 @@ class Session:
         }
         # Map original action to its progress callback name.
         action = transfer["action"]
-        progress_action = ("drop-progress" if action == "drag-drop"
+        progress_action = ("drop-progress" if action == "drop-end"
                            else "progress")
         self._dispatch_callback(
             transfer["wid"], progress_action, progress_info)

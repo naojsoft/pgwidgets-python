@@ -79,7 +79,7 @@ def on_session(session):
             ta.set_text(evt["text"])
             status.set_text("Loaded dropped text")
 
-    drop_label.on("drag-drop", on_drop)
+    drop_label.on("drop-end", on_drop)
 
     print(f"Session {session.id}: UI built.")
 
