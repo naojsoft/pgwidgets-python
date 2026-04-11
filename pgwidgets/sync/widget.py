@@ -6,7 +6,7 @@ import base64
 import mimetypes
 import os
 
-from pgwidgets.defs import WIDGETS, WIDGET_METHODS, CONTAINER_METHODS
+from pgwidgets.defs import WIDGETS, CALLBACK_METHODS, WIDGET_METHODS, CONTAINER_METHODS
 
 
 class Widget:
@@ -134,8 +134,13 @@ def build_widget_class(js_class, defn):
 
     # Base methods (WIDGET_METHODS, plus get_children for containers).
     # Applied first so per-widget methods can override.
-    base_methods = CONTAINER_METHODS if defn.get("base") == "container" \
-        else WIDGET_METHODS
+    base = defn.get("base")
+    if base == "container":
+        base_methods = CONTAINER_METHODS
+    elif base == "callback":
+        base_methods = CALLBACK_METHODS
+    else:
+        base_methods = WIDGET_METHODS
     for method_name, param_names in base_methods.items():
         # destroy() is defined explicitly on the Widget base class so it
         # can also drop the wrapper from the Python-side registry.

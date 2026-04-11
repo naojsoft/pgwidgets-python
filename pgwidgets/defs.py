@@ -5,6 +5,7 @@ The canonical definitions live in pgwidgets_js.defs so they can be shared
 across all language wrappers (pgwidgets-python, pyodide, etc.).
 """
 
-from pgwidgets_js.defs import WIDGETS, WIDGET_METHODS, CONTAINER_METHODS
+from pgwidgets_js.defs import (WIDGETS, CALLBACK_METHODS,
+                               WIDGET_METHODS, CONTAINER_METHODS)
 
-__all__ = ["WIDGETS", "WIDGET_METHODS", "CONTAINER_METHODS"]
+__all__ = ["WIDGETS", "CALLBACK_METHODS", "WIDGET_METHODS", "CONTAINER_METHODS"]
