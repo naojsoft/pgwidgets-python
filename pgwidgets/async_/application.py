@@ -60,6 +60,7 @@ class Session:
         self._widget_map = {}    # wid -> Widget instance
 
         self._widget_classes = app._widget_classes
+        self._transfers = {}     # transfer_id -> transfer state dict
 
         # Per-session lock (for "per_session" and "serialized" modes).
         self._cb_lock = None
@@ -96,22 +97,104 @@ class Session:
                 else:
                     future.set_result(msg)
 
+        elif msg_type == "file-chunk":
+            self._handle_file_chunk(msg)
+
         elif msg_type == "callback":
-            key = f"{msg['wid']}:{msg['action']}"
-            handler = self._callbacks.get(key)
-            if handler:
-                cb_args = (msg["wid"], *msg.get("args", []))
-                mode = self._app._concurrency
-                if mode == "concurrent":
-                    asyncio.ensure_future(handler(*cb_args))
-                elif mode == "per_session":
-                    asyncio.ensure_future(
-                        self._serialized_dispatch(
-                            handler, cb_args, self._cb_lock))
-                else:  # serialized
-                    asyncio.ensure_future(
-                        self._serialized_dispatch(
-                            handler, cb_args, self._app._cb_lock))
+            # If this is a drag-drop with a transfer_id, stash the
+            # metadata — the real callback fires after all chunks arrive.
+            if (msg.get("action") == "drag-drop"
+                    and msg.get("args")
+                    and isinstance(msg["args"][0], dict)
+                    and "transfer_id" in msg["args"][0]):
+                payload = msg["args"][0]
+                tid = payload["transfer_id"]
+                self._transfers[tid] = {
+                    "wid": msg["wid"],
+                    "payload": payload,
+                    "file_data": {},   # file_index -> [chunk, ...]
+                    "num_chunks": {},  # file_index -> expected count
+                }
+                return
+
+            self._dispatch_callback(
+                msg["wid"], msg["action"], *msg.get("args", []))
+
+    def _handle_file_chunk(self, msg):
+        """Handle a file-chunk message: buffer data and fire callbacks."""
+        tid = msg["transfer_id"]
+        transfer = self._transfers.get(tid)
+        if transfer is None:
+            return
+
+        fi = msg["file_index"]
+        fc = msg["file_count"]
+        if fi not in transfer["file_data"]:
+            transfer["file_data"][fi] = []
+            transfer["num_chunks"][fi] = msg["num_chunks"]
+        transfer["file_data"][fi].append(msg["data"])
+
+        # Check if all files have received all their chunks.
+        all_complete = (
+            len(transfer["num_chunks"]) == fc
+            and all(
+                len(transfer["file_data"][i]) >= transfer["num_chunks"][i]
+                for i in range(fc)
+            )
+        )
+
+        # Compute byte-level progress from file sizes and chunk counts.
+        files_meta = transfer["payload"]["files"]
+        transferred_bytes = 0
+        total_bytes = 0
+        for i, fmeta in enumerate(files_meta):
+            fsize = fmeta.get("size", 0)
+            total_bytes += fsize
+            nc = transfer["num_chunks"].get(i)
+            if nc:
+                received = len(transfer["file_data"].get(i, []))
+                transferred_bytes += fsize * received // nc
+
+        progress_info = {
+            "transfer_id": tid,
+            "file_index": fi,
+            "chunk_index": msg["chunk_index"],
+            "num_chunks": msg["num_chunks"],
+            "transferred_bytes": transferred_bytes,
+            "total_bytes": total_bytes,
+            "complete": all_complete,
+        }
+        self._dispatch_callback(
+            transfer["wid"], "drop-progress", progress_info)
+
+        if all_complete:
+            # Reassemble file data and fire drag-drop callback.
+            payload = transfer["payload"]
+            for i, file_meta in enumerate(payload["files"]):
+                file_meta["data"] = "".join(
+                    transfer["file_data"].get(i, []))
+            del self._transfers[tid]
+            self._dispatch_callback(
+                transfer["wid"], "drag-drop", payload)
+
+    def _dispatch_callback(self, wid, action, *args):
+        """Dispatch a callback through the configured concurrency mode."""
+        key = f"{wid}:{action}"
+        handler = self._callbacks.get(key)
+        if not handler:
+            return
+        cb_args = (wid, *args)
+        mode = self._app._concurrency
+        if mode == "concurrent":
+            asyncio.ensure_future(handler(*cb_args))
+        elif mode == "per_session":
+            asyncio.ensure_future(
+                self._serialized_dispatch(
+                    handler, cb_args, self._cb_lock))
+        else:  # serialized
+            asyncio.ensure_future(
+                self._serialized_dispatch(
+                    handler, cb_args, self._app._cb_lock))
 
     @staticmethod
     async def _serialized_dispatch(handler, args, lock):
