@@ -1,5 +1,5 @@
-pgwidgets
-=========
+pgwidgets-python
+================
 
 Python bindings for the `pgwidgets <https://github.com/naojsoft/pgwidgets>`_
 JavaScript widget library. Build desktop-style browser UIs from Python with a

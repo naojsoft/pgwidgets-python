@@ -1,6 +1,6 @@
 # Configuration file for the Sphinx documentation builder.
 
-project = "pgwidgets"
+project = "pgwidgets-python"
 copyright = "2024, PGWidgets Developers"
 author = "PGWidgets Developers"
 
@@ -16,7 +16,7 @@ exclude_patterns = ["_build"]
 
 # -- HTML output --
 html_theme = "furo"
-html_title = "pgwidgets"
+html_title = "pgwidgets-python"
 
 # -- autodoc --
 autodoc_member_order = "bysource"
