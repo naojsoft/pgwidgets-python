@@ -333,7 +333,6 @@ class Application:
         self._next_session_id = 1
         self._on_connect = None      # user callback: fn(session)
         self._on_disconnect = None   # user callback: fn(session)
-        self._connected = asyncio.Event()
         self._session_semaphore = None  # initialized in start()
         self._cb_lock = None         # for "serialized" mode
 
@@ -402,10 +401,6 @@ class Application:
         """
         self._favicon_path = Path(path)
 
-    async def wait_for_connection(self):
-        """Wait until at least one browser connects."""
-        await self._connected.wait()
-
     # -- WebSocket handling --
 
     async def _ws_handler(self, ws):
@@ -428,7 +423,6 @@ class Application:
         await ws.recv()  # wait for ack
 
         self._sessions[session_id] = session
-        self._connected.set()
         print(f"Session {session_id} connected.")
 
         # Launch on_connect as a concurrent task so it runs alongside
@@ -444,8 +438,6 @@ class Application:
                 session._handle_message(message)
         finally:
             self._sessions.pop(session_id, None)
-            if not self._sessions:
-                self._connected.clear()
 
             print(f"Session {session_id} disconnected.")
 

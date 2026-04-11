@@ -87,8 +87,4 @@ def on_session(session):
     print(f"Session {session.id}: UI built.")
 
 
-app.start()
-print("Waiting for browser connection...")
-app.wait_for_connection()
-print("Connected!")
 app.run()

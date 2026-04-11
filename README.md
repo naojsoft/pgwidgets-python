@@ -19,24 +19,24 @@ This will also install `pgwidgets-js` (the JavaScript assets) and
 from pgwidgets.sync import Application
 
 app = Application()
-app.start()
-W = app.get_widgets()
 
-app.wait_for_connection()
+@app.on_connect
+def setup(session):
+    Widgets = session.get_widgets()
 
-top = W.TopLevel(title="Hello", resizable=True)
-top.resize(400, 300)
+    top = Widgets.TopLevel(title="Hello", resizable=True)
+    top.resize(400, 300)
 
-vbox = W.VBox(spacing=8, padding=10)
-btn = W.Button("Click me")
-label = W.Label("Ready")
+    vbox = Widgets.VBox(spacing=8, padding=10)
+    btn = Widgets.Button("Click me")
+    label = Widgets.Label("Ready")
 
-btn.on("activated", lambda: label.set_text("Clicked!"))
+    btn.on("activated", lambda: label.set_text("Clicked!"))
 
-vbox.add_widget(btn, 0)
-vbox.add_widget(label, 1)
-top.set_widget(vbox)
-top.show()
+    vbox.add_widget(btn, 0)
+    vbox.add_widget(label, 1)
+    top.set_widget(vbox)
+    top.show()
 
 app.run()
 ```
@@ -51,22 +51,28 @@ Both APIs provide the same widget classes and methods.
 ```python
 from pgwidgets.sync import Application
 app = Application()
-app.start()
-W = app.get_widgets()
 
-btn = W.Button("Click")      # blocking call
-btn.set_text("New text")     # blocking call
+@app.on_connect
+def setup(session):
+    Widgets = session.get_widgets()
+    btn = Widgets.Button("Click")      # blocking call
+    btn.set_text("New text")           # blocking call
+
+app.run()
 ```
 
 **Asynchronous** (for asyncio applications):
 ```python
 from pgwidgets.async_ import Application
 app = Application()
-await app.start()
-W = app.get_widgets()
 
-btn = await W.Button("Click")    # awaitable
-await btn.set_text("New text")   # awaitable
+@app.on_connect
+async def setup(session):
+    Widgets = session.get_widgets()
+    btn = await Widgets.Button("Click")    # awaitable
+    await btn.set_text("New text")         # awaitable
+
+await app.run()
 ```
 
 ## How It Works

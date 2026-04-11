@@ -436,7 +436,6 @@ class Application:
         self._on_connect = None      # user callback: fn(session)
         self._on_disconnect = None   # user callback: fn(session)
         self._cb_queue = queue.Queue()  # for "serialized" mode
-        self._connected = threading.Event()  # set when >= 1 session
 
         self._loop = None
         self._thread = None
@@ -527,7 +526,6 @@ class Application:
         with self._session_lock:
             self._sessions[session_id] = session
 
-        self._connected.set()
         print(f"Session {session_id} connected.")
 
         # Notify user code.
@@ -544,8 +542,6 @@ class Application:
 
             with self._session_lock:
                 self._sessions.pop(session_id, None)
-                if not self._sessions:
-                    self._connected.clear()
 
             print(f"Session {session_id} disconnected.")
 
@@ -607,10 +603,6 @@ class Application:
             target=self._httpd.serve_forever, daemon=True)
         self._http_thread.start()
 
-    def wait_for_connection(self):
-        """Block until at least one browser connects."""
-        self._connected.wait()
-
     @property
     def sessions(self):
         """Dict of active sessions (session_id -> Session)."""
@@ -670,12 +662,16 @@ class Application:
         self._shutdown.set()
 
     def run(self):
-        """Block forever, processing callbacks. Ctrl-C to exit.
+        """Start servers and block forever processing callbacks. Ctrl-C to exit.
+
+        Calls start() automatically if it hasn't been called yet.
 
         In ``serialized`` mode, callbacks are dispatched on this thread.
         In ``per_session`` and ``concurrent`` modes, callbacks run on
         other threads; this method simply sleeps.
         """
+        if self._loop is None:
+            self.start()
         self._shutdown = threading.Event()
         try:
             if self._concurrency == "serialized":
