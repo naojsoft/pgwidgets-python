@@ -151,16 +151,16 @@ class Session:
             self._handle_file_chunk(msg)
 
         elif msg_type == "callback":
-            # If this is a drag-drop with a transfer_id, stash the
-            # metadata — the real callback fires after all chunks arrive.
-            if (msg.get("action") == "drag-drop"
-                    and msg.get("args")
+            # If the payload has a transfer_id, stash the metadata —
+            # the real callback fires after all chunks arrive.
+            if (msg.get("args")
                     and isinstance(msg["args"][0], dict)
                     and "transfer_id" in msg["args"][0]):
                 payload = msg["args"][0]
                 tid = payload["transfer_id"]
                 self._transfers[tid] = {
                     "wid": msg["wid"],
+                    "action": msg["action"],
                     "payload": payload,
                     "file_data": {},   # file_index -> [chunk, ...]
                     "num_chunks": {},  # file_index -> expected count
@@ -214,18 +214,22 @@ class Session:
             "total_bytes": total_bytes,
             "complete": all_complete,
         }
+        # Map original action to its progress callback name.
+        action = transfer["action"]
+        progress_action = ("drop-progress" if action == "drag-drop"
+                           else "progress")
         self._dispatch_callback(
-            transfer["wid"], "drop-progress", progress_info)
+            transfer["wid"], progress_action, progress_info)
 
         if all_complete:
-            # Reassemble file data and fire drag-drop callback.
+            # Reassemble file data and fire the original callback.
             payload = transfer["payload"]
             for i, file_meta in enumerate(payload["files"]):
                 file_meta["data"] = "".join(
                     transfer["file_data"].get(i, []))
             del self._transfers[tid]
             self._dispatch_callback(
-                transfer["wid"], "drag-drop", payload)
+                transfer["wid"], action, payload)
 
     def _dispatch_callback(self, wid, action, *args):
         """Dispatch a callback through the configured concurrency mode."""
@@ -655,18 +659,29 @@ class Application:
         static_path = str(get_static_path())
         remote_html = get_remote_html()
         favicon_path = self._favicon_path
+        ws_host = self._host
+        ws_port = self._ws_port
 
         class Handler(http.server.SimpleHTTPRequestHandler):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, directory=static_path, **kwargs)
 
             def do_GET(self):
-                # serve remote.html at the root
+                # serve remote.html at the root, with WS URL injected
                 if self.path == "/" or self.path == "/index.html":
+                    html = remote_html.read_text(encoding="utf-8")
+                    inject = (
+                        f'<script>window.PGWIDGETS_WS_URL'
+                        f' = "ws://{ws_host}:{ws_port}";</script>\n')
+                    html = html.replace("<head>",
+                                        "<head>\n" + inject, 1)
+                    body = html.encode("utf-8")
                     self.send_response(200)
-                    self.send_header("Content-Type", "text/html")
+                    self.send_header("Content-Type",
+                                     "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
-                    self.wfile.write(remote_html.read_bytes())
+                    self.wfile.write(body)
                     return
                 # serve the favicon
                 if self.path == "/favicon.svg" or self.path == "/favicon.ico":
