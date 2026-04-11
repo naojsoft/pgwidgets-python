@@ -6,11 +6,15 @@ Run this script and open the URL it prints in a browser.
 """
 
 import asyncio
+import logging
 from pgwidgets.async_ import Application
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("pgwidgets")
 
 
 async def main():
-    app = Application(max_sessions=4)
+    app = Application(max_sessions=4, logger=logger)
 
     @app.on_connect
     async def on_session(session):

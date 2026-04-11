@@ -6,9 +6,13 @@ Run this script and open the URL it prints in a browser.
 """
 
 import base64
+import logging
 from pgwidgets.sync import Application
 
-app = Application(max_sessions=4)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("pgwidgets")
+
+app = Application(max_sessions=4, logger=logger)
 
 
 @app.on_connect

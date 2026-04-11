@@ -5,9 +5,13 @@ TreeView demo — synchronous pgwidgets.
 Run this script and open the URL it prints in a browser.
 """
 
+import logging
 from pgwidgets.sync import Application
 
-app = Application()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("pgwidgets")
+
+app = Application(logger=logger)
 
 
 @app.on_connect

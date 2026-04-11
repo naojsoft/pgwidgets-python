@@ -10,6 +10,7 @@ callbacks for that connection.
 
 import asyncio
 import json
+import logging
 import mimetypes
 import traceback
 from http.server import SimpleHTTPRequestHandler
@@ -394,11 +395,14 @@ class Application:
         Maximum number of concurrent sessions (default 1).
         Set to None for unlimited.  When the limit is reached, new
         connections are held until an existing session disconnects.
+    logger : logging.Logger or None
+        Logger for status messages.  If None (default), a null logger
+        is used and no output is produced.
     """
 
     def __init__(self, ws_port=9500, http_port=9501, host="127.0.0.1",
                  http_server=True, concurrency_handling="per_session",
-                 max_sessions=1):
+                 max_sessions=1, logger=None):
         if concurrency_handling not in _CONCURRENCY_MODES:
             raise ValueError(
                 f"concurrency_handling must be one of "
@@ -409,6 +413,11 @@ class Application:
         self._use_http_server = http_server
         self._concurrency = concurrency_handling
         self._max_sessions = max_sessions
+
+        if logger is None:
+            logger = logging.getLogger("pgwidgets")
+            logger.addHandler(logging.NullHandler())
+        self._logger = logger
 
         self._favicon_path = Path(get_static_path()) / "icons" / "pgicon.svg"
 
@@ -506,7 +515,7 @@ class Application:
         await ws.recv()  # wait for ack
 
         self._sessions[session_id] = session
-        print(f"Session {session_id} connected.")
+        self._logger.info(f"Session {session_id} connected.")
 
         # Launch on_connect as a concurrent task so it runs alongside
         # the message loop below — on_connect sends widget commands
@@ -522,7 +531,7 @@ class Application:
         finally:
             self._sessions.pop(session_id, None)
 
-            print(f"Session {session_id} disconnected.")
+            self._logger.info(f"Session {session_id} disconnected.")
 
             if self._on_disconnect:
                 result = self._on_disconnect(session)
@@ -589,9 +598,10 @@ class Application:
             self._cb_lock = asyncio.Lock()
 
         if self._use_http_server:
-            print(f"Open {self.url} in a browser to connect.")
+            self._logger.info(f"Open {self.url} in a browser to connect.")
             asyncio.ensure_future(self._start_http_server())
-        print(f"WebSocket on ws://{self._host}:{self._ws_port}")
+        self._logger.info(
+            f"WebSocket on ws://{self._host}:{self._ws_port}")
 
         self._ws_server = await websockets.serve(
             self._ws_handler, self._host, self._ws_port)
@@ -628,4 +638,4 @@ class Application:
             pass
         finally:
             await self.close()
-            print("\nShutting down.")
+            self._logger.info("Shutting down.")

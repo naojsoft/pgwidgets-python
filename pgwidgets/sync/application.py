@@ -10,6 +10,7 @@ callbacks for that connection.
 
 import asyncio
 import json
+import logging
 import mimetypes
 import queue
 import threading
@@ -491,11 +492,14 @@ class Application:
         Maximum number of concurrent sessions (default 1).
         Set to None for unlimited.  When the limit is reached, new
         connections are held until an existing session disconnects.
+    logger : logging.Logger or None
+        Logger for status messages.  If None (default), a null logger
+        is used and no output is produced.
     """
 
     def __init__(self, ws_port=9500, http_port=9501, host="127.0.0.1",
                  http_server=True, concurrency_handling="per_session",
-                 max_sessions=1):
+                 max_sessions=1, logger=None):
         if concurrency_handling not in _CONCURRENCY_MODES:
             raise ValueError(
                 f"concurrency_handling must be one of "
@@ -506,6 +510,11 @@ class Application:
         self._use_http_server = http_server
         self._concurrency = concurrency_handling
         self._max_sessions = max_sessions
+
+        if logger is None:
+            logger = logging.getLogger("pgwidgets")
+            logger.addHandler(logging.NullHandler())
+        self._logger = logger
 
         self._favicon_path = Path(get_static_path()) / "icons" / "pgicon.svg"
 
@@ -570,8 +579,8 @@ class Application:
 
         if self._use_http_server:
             self._start_http_server()
-            print(f"Open {self.url} in a browser to connect.")
-        print(f"WebSocket on ws://{self._host}:{self._ws_port}")
+            self._logger.info(f"Open {self.url} in a browser to connect.")
+        self._logger.info(f"WebSocket on ws://{self._host}:{self._ws_port}")
 
     def _run_loop(self):
         asyncio.set_event_loop(self._loop)
@@ -605,7 +614,7 @@ class Application:
         with self._session_lock:
             self._sessions[session_id] = session
 
-        print(f"Session {session_id} connected.")
+        self._logger.info(f"Session {session_id} connected.")
 
         # Notify user code.
         if self._on_connect:
@@ -622,7 +631,7 @@ class Application:
             with self._session_lock:
                 self._sessions.pop(session_id, None)
 
-            print(f"Session {session_id} disconnected.")
+            self._logger.info(f"Session {session_id} disconnected.")
 
             if self._on_disconnect:
                 self._dispatch(session, self._on_disconnect, (session,))
@@ -760,7 +769,7 @@ class Application:
         except KeyboardInterrupt:
             pass
         finally:
-            print("\nShutting down.")
+            self._logger.info("Shutting down.")
 
     def _run_idle_loop(self):
         """Sleep until shutdown is signalled."""
