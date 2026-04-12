@@ -6,7 +6,7 @@ Installation
 
 .. code-block:: bash
 
-   pip install pgwidgets
+   pip install pgwidgets-python
 
 This installs ``pgwidgets-js`` (the JavaScript assets) and ``websockets`` as
 dependencies.
@@ -15,7 +15,7 @@ For development (Sphinx docs, etc.):
 
 .. code-block:: bash
 
-   pip install pgwidgets[dev]
+   pip install pgwidgets-python[dev]
 
 Quick Start
 -----------

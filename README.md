@@ -7,7 +7,7 @@ with a familiar Qt/GTK-style API.
 ## Installation
 
 ```bash
-pip install pgwidgets
+pip install pgwidgets-python
 ```
 
 This will also install `pgwidgets-js` (the JavaScript assets) and
