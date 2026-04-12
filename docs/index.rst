@@ -38,6 +38,7 @@ familiar Qt/GTK-style API.
    architecture
    sync
    async
+   web-servers
    widgets
    callbacks
 
