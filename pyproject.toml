@@ -29,6 +29,7 @@ classifiers = [
 
 [project.optional-dependencies]
 dev = ["sphinx", "furo", "sphinx-autodoc-typehints"]
+test = ["pytest"]
 
 [project.urls]
 Homepage = "https://github.com/naojsoft/pgwidgets-python"
@@ -37,6 +38,7 @@ Repository = "https://github.com/naojsoft/pgwidgets-python"
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"
 local_scheme = "node-and-date"
+
 
 [tool.setuptools.packages.find]
 include = ["pgwidgets*"]

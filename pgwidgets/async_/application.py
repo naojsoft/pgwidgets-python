@@ -14,7 +14,6 @@ import logging
 import mimetypes
 import traceback
 from http.server import SimpleHTTPRequestHandler
-from functools import partial
 from pathlib import Path
 
 import websockets

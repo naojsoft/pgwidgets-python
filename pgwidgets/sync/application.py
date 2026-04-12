@@ -16,7 +16,6 @@ import queue
 import threading
 import traceback
 import http.server
-import functools
 from pathlib import Path
 
 import websockets
