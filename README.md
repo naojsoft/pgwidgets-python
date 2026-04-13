@@ -4,6 +4,11 @@ Python bindings for the [pgwidgets](https://github.com/naojsoft/pgwidgets-js)
 JavaScript widget library. Build desktop-style browser UIs from Python
 with a familiar Qt/GTK-style API.
 
+## Documentation
+
+Full documentation is available at
+[pgwidgets-python.readthedocs.io](https://pgwidgets-python.readthedocs.io/en/latest/).
+
 ## Installation
 
 ```bash
