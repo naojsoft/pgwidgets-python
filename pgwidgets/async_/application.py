@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import mimetypes
+import signal
 import secrets
 import traceback
 from http.server import SimpleHTTPRequestHandler
@@ -532,7 +533,7 @@ class Session:
             # Auto-wrap JS-created widgets
             cls_name = js_class or val.get("__class__")
             cls = self._widget_classes.get(cls_name, Widget) if cls_name else Widget
-            widget = cls(self, wid, cls_name or "Widget")
+            widget = cls._from_existing(self, wid, cls_name or "Widget")
             self._widget_map[wid] = widget
             # Auto-listen for state-syncing callbacks (move, resize)
             # so position/size changes are tracked for reconstruction.
@@ -552,109 +553,28 @@ class Session:
     # -- Widget factory --
 
     def get_widgets(self):
-        """Return a namespace with async factory methods for all widget types.
+        """Return a namespace with widget classes bound to this session.
 
         Usage:
-            Widgets = session.get_widgets()
-            btn = await Widgets.Button("Click me")
+            W = session.get_widgets()
+            btn = await W.Button("Click me")
+
+        Each attribute is a thin wrapper that passes this session as
+        the first argument to the widget class constructor.  The
+        returned object is awaitable (two-phase async init).
         """
         ns = _Namespace()
         session = self
 
         for js_class, cls in self._widget_classes.items():
-            defn = WIDGETS[js_class]
-
-            def make_factory(js_cls, widget_cls, widget_defn):
-                async def factory(*args, **kwargs):
-                    pos_names = widget_defn.get("args", [])
-                    opt_names = widget_defn.get("options", [])
-
-                    js_args = list(args[:len(pos_names)])
-
-                    for i, val in enumerate(args[len(pos_names):]):
-                        if i < len(opt_names):
-                            kwargs[opt_names[i]] = val
-
-                    options = {}
-                    for k in list(kwargs.keys()):
-                        if k in opt_names:
-                            options[k] = kwargs.pop(k)
-
-                    if options:
-                        js_args.append(options)
-
-                    wid = await session._create(js_cls, *js_args)
-                    widget = widget_cls(session, wid, js_cls)
-                    session._widget_map[wid] = widget
-
-                    # Store constructor info for reconstruction
-                    widget._constructor_args = tuple(
-                        args[:len(pos_names)])
-                    widget._constructor_options = dict(options)
-
-                    # Store constructor args as initial state.
-                    for i, name in enumerate(pos_names):
-                        if i < len(args):
-                            widget._state[name] = args[i]
-                    for k, v in options.items():
-                        widget._state[k] = v
-
-                    # apply remaining kwargs as method calls
-                    for k, v in kwargs.items():
-                        setter = f"set_{k}"
-                        if hasattr(widget, setter):
-                            await getattr(widget, setter)(v)
-                        else:
-                            raise TypeError(
-                                f"{js_cls}() got unexpected keyword "
-                                f"argument '{k}'")
-
-                    # Auto-listen for callbacks that sync state
-                    opt_names_set = set(widget_defn.get("options", []))
-                    all_callbacks = widget_defn.get("callbacks", [])
-                    for action in STATE_SYNC_CALLBACKS:
-                        req_opt = STATE_SYNC_REQUIRES_OPTION.get(action)
-                        if req_opt and req_opt not in opt_names_set:
-                            continue
-                        if req_opt is None and action not in all_callbacks:
-                            continue
-                        await session._listen(
-                            wid, action, lambda wid, *a: None)
-                        widget._auto_sync_actions.add(action)
-
-                    # Per-widget-class state sync
-                    cls_sync = WIDGET_CALLBACK_SYNC.get(js_cls, {})
-                    for action in cls_sync:
-                        if action not in widget._auto_sync_actions:
-                            await session._listen(
-                                wid, action, lambda wid, *a: None)
-                            widget._auto_sync_actions.add(action)
-
-                    # Auto-listen for child-close callbacks
-                    for action in CHILD_CLOSE_CALLBACKS:
-                        if action in all_callbacks:
-                            await session._listen(
-                                wid, action, lambda wid, *a: None)
-                            widget._auto_sync_actions.add(action)
-
-                    # Auto-listen for tree/table state callbacks
-                    if js_cls in TREE_VIEW_WIDGETS:
-                        for action in ("expanded", "collapsed", "sorted"):
-                            if action not in widget._auto_sync_actions:
-                                await session._listen(
-                                    wid, action, lambda wid, *a: None)
-                                widget._auto_sync_actions.add(action)
-
-                    # Track as root widget
-                    session._root_widgets.append(widget)
-
-                    return widget
-
-                factory.__name__ = js_cls
-                factory.__qualname__ = js_cls
+            def make_factory(widget_cls):
+                def factory(*args, **kwargs):
+                    return widget_cls(session, *args, **kwargs)
+                factory.__name__ = widget_cls.__name__
+                factory.__qualname__ = widget_cls.__qualname__
                 return factory
 
-            setattr(ns, js_class, make_factory(js_class, cls, defn))
+            setattr(ns, js_class, make_factory(cls))
 
         return ns
 
@@ -1252,13 +1172,21 @@ class Application:
             self._run_future.cancel()
 
     async def run(self):
-        """Start servers and run forever. Ctrl-C to exit."""
+        """Start servers and run forever. Ctrl-C to exit cleanly."""
         await self.start()
-        self._run_future = asyncio.get_event_loop().create_future()
+        loop = asyncio.get_event_loop()
+        self._run_future = loop.create_future()
+
+        # Install SIGINT handler so Ctrl-C triggers a clean shutdown
+        # instead of raising KeyboardInterrupt.
+        loop.add_signal_handler(signal.SIGINT,
+                                lambda: asyncio.ensure_future(self.close()))
+
         try:
             await self._run_future
         except asyncio.CancelledError:
             pass
         finally:
+            loop.remove_signal_handler(signal.SIGINT)
             await self.close()
             self._logger.info("Shutting down.")

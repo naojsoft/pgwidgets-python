@@ -40,6 +40,7 @@ familiar Qt/GTK-style API.
    async
    web-servers
    widgets
+   subclassing
    callbacks
 
 .. toctree::

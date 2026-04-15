@@ -58,8 +58,7 @@ class MockSession:
 def _make_widget(session, js_class="Label", wid=1):
     """Create a widget instance with the mock session."""
     cls = build_widget_class(js_class, WIDGETS[js_class])
-    w = cls.__new__(cls)
-    Widget.__init__(w, session, wid, js_class)
+    w = cls._from_existing(session, wid, js_class)
     session._widget_map[wid] = w
     return w
 

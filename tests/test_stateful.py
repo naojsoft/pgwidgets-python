@@ -49,8 +49,7 @@ class MockSession:
 def _make(session, js_class, wid, **initial_state):
     """Create a widget with optional initial state."""
     cls = build_widget_class(js_class, WIDGETS[js_class])
-    w = cls.__new__(cls)
-    Widget.__init__(w, session, wid, js_class)
+    w = cls._from_existing(session, wid, js_class)
     session._widget_map[wid] = w
     session._root_widgets.append(w)
     for k, v in initial_state.items():

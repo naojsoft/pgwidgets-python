@@ -6,9 +6,12 @@ All widgets are created through the factory namespace returned by
 
 .. code-block:: python
 
-   Widgets = session.get_widgets()
-   btn = Widgets.Button("Click me")           # sync
-   btn = await Widgets.Button("Click me")     # async
+   W = session.get_widgets()
+   btn = W.Button("Click me")           # sync
+   btn = await W.Button("Click me")     # async
+
+Widget classes can also be imported directly for subclassing — see
+:doc:`subclassing` for details.
 
 Every widget inherits common base methods (see `Base Methods`_ below), plus
 its own methods listed in each section.

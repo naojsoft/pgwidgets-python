@@ -17,30 +17,177 @@ from pgwidgets.method_types import (
     CHILD_METHODS as CHILD_METHOD_TYPES,
     FIXED_SETTERS, CLEAR_RESETS, ITEM_LIST_CONFIG,
     REPLAY_METHODS, CHILD_SELECT_METHODS, TREE_VIEW_WIDGETS,
+    STATE_SYNC_CALLBACKS, STATE_SYNC_REQUIRES_OPTION,
+    WIDGET_CALLBACK_SYNC, CHILD_CLOSE_CALLBACKS,
 )
 
 
 class Widget:
     """Base class for all synchronous widget wrappers.
 
+    Subclasses are generated from widget definitions and have proper
+    constructors with named parameters::
+
+        btn = Button(session, "Click me", icon="path/to/icon.png")
+
+    The first argument is always the session.  Remaining arguments
+    match the widget definition's ``args`` and ``options``.
+
     Stores local state so the Python side can serve as the source of
     truth for the UI.
     """
 
-    def __init__(self, session, wid, js_class):
-        self._session = session
-        self._wid = wid
-        self._js_class = js_class
+    # Set by build_widget_class() on generated subclasses.
+    _js_class_name = None
+    _defn = None
 
-        # State tracking
-        self._state = {}               # state_key -> value(s)
-        self._children = []            # list of (child_widget, args_tuple)
-        self._parent = None            # parent widget or None
-        self._constructor_args = ()    # positional args passed to JS constructor
-        self._constructor_options = {} # options dict passed to JS constructor
-        self._registered_callbacks = {}  # action -> (handler, extra_args, extra_kwargs, style)
-        self._auto_sync_actions = set() # callbacks auto-listened for state sync
-        self._replay_calls = []        # [(method, args, returned_widget)]
+    def __init__(self, session, *args, **kwargs):
+        """Create a widget and register it with the session.
+
+        Parameters
+        ----------
+        session : Session
+            The session this widget belongs to.
+        *args
+            Positional arguments matching the widget definition's ``args``
+            and ``options`` lists.
+        **kwargs
+            Keyword arguments matching the widget definition's ``options``
+            list.  Extra kwargs are applied as ``set_<name>()`` calls.
+        """
+        defn = self._defn
+        if defn is None:
+            raise TypeError(
+                "Cannot instantiate Widget directly. "
+                "Use a specific widget class (e.g. Button, Label).")
+
+        js_class = self._js_class_name
+
+        # Initialize state containers
+        self._session = session
+        self._js_class = js_class
+        self._state = {}
+        self._children = []
+        self._parent = None
+        self._constructor_args = ()
+        self._constructor_options = {}
+        self._registered_callbacks = {}
+        self._auto_sync_actions = set()
+        self._replay_calls = []
+
+        # Parse args/kwargs against definition
+        pos_names = defn.get("args", [])
+        opt_names = defn.get("options", [])
+
+        js_args = list(args[:len(pos_names)])
+
+        for i, val in enumerate(args[len(pos_names):]):
+            if i < len(opt_names):
+                kwargs[opt_names[i]] = val
+
+        options = {}
+        for k in list(kwargs.keys()):
+            if k in opt_names:
+                options[k] = kwargs.pop(k)
+
+        if options:
+            js_args.append(options)
+
+        # Allocate wid and create on JS side
+        wid = session._create(js_class, *js_args)
+        self._wid = wid
+        session._widget_map[wid] = self
+
+        # Store constructor info for reconstruction
+        self._constructor_args = tuple(args[:len(pos_names)])
+        self._constructor_options = dict(options)
+
+        # Store constructor args as initial state
+        for i, name in enumerate(pos_names):
+            if i < len(args):
+                self._state[name] = args[i]
+        for k, v in options.items():
+            self._state[k] = v
+
+        # Apply remaining kwargs as setter calls
+        for k, v in kwargs.items():
+            setter = f"set_{k}"
+            if hasattr(self, setter):
+                getattr(self, setter)(v)
+            else:
+                raise TypeError(
+                    f"{js_class}() got unexpected keyword "
+                    f"argument '{k}'")
+
+        # Register auto-sync listeners
+        self._register_auto_sync()
+
+        # Track as root widget (may be reparented later)
+        session._root_widgets.append(self)
+
+    @classmethod
+    def _from_existing(cls, session, wid, js_class):
+        """Create a Widget wrapper for an already-existing JS widget.
+
+        Used internally by ``_resolve_return`` and ``_reconstruct_widget``
+        to wrap widgets that were created on the JS side or are being
+        replayed during reconstruction.
+        """
+        obj = cls.__new__(cls)
+        obj._session = session
+        obj._wid = wid
+        obj._js_class = js_class
+        obj._state = {}
+        obj._children = []
+        obj._parent = None
+        obj._constructor_args = ()
+        obj._constructor_options = {}
+        obj._registered_callbacks = {}
+        obj._auto_sync_actions = set()
+        obj._replay_calls = []
+        return obj
+
+    def _register_auto_sync(self):
+        """Register auto-sync listeners for state tracking and cross-browser sync."""
+        defn = self._defn
+        if defn is None:
+            return
+        session = self._session
+        wid = self._wid
+        js_class = self._js_class
+
+        opt_names_set = set(defn.get("options", []))
+        all_callbacks = defn.get("callbacks", [])
+
+        # State-sync callbacks (move -> position, resize -> size)
+        for action in STATE_SYNC_CALLBACKS:
+            req_opt = STATE_SYNC_REQUIRES_OPTION.get(action)
+            if req_opt and req_opt not in opt_names_set:
+                continue
+            if req_opt is None and action not in all_callbacks:
+                continue
+            session._listen(wid, action, lambda wid, *a: None)
+            self._auto_sync_actions.add(action)
+
+        # Per-widget-class state sync (e.g. Slider "activated" -> value)
+        cls_sync = WIDGET_CALLBACK_SYNC.get(js_class, {})
+        for action in cls_sync:
+            if action not in self._auto_sync_actions:
+                session._listen(wid, action, lambda wid, *a: None)
+                self._auto_sync_actions.add(action)
+
+        # Child-close callbacks (e.g. MDI page-close)
+        for action in CHILD_CLOSE_CALLBACKS:
+            if action in all_callbacks:
+                session._listen(wid, action, lambda wid, *a: None)
+                self._auto_sync_actions.add(action)
+
+        # Tree/table state callbacks
+        if js_class in TREE_VIEW_WIDGETS:
+            for action in ("expanded", "collapsed", "sorted"):
+                if action not in self._auto_sync_actions:
+                    session._listen(wid, action, lambda wid, *a: None)
+                    self._auto_sync_actions.add(action)
 
     @property
     def wid(self):
@@ -442,10 +589,60 @@ def build_widget_class(js_class, defn):
     if js_class in TREE_VIEW_WIDGETS:
         _add_tree_view_methods(attrs, all_methods)
 
+    # Generate __init__ with named parameters
+    pos_names = defn.get("args", [])
+    opt_names = defn.get("options", [])
+
     cls = type(js_class, (Widget,), attrs)
     cls._js_class_name = js_class
     cls._defn = defn
+
+    # Create __init__ with proper signature via exec
+    ns = {"_cls": cls, "super": super}
+    body_prefix = "_pos = []\n    " if pos_names else ""
+    exec_src = f"""
+def __init__({_init_params(pos_names, opt_names)}):
+    {body_prefix}{_init_body(pos_names, opt_names)}
+"""
+    exec(exec_src, ns)
+    cls.__init__ = ns["__init__"]
+
     return cls
+
+
+def _init_params(pos_names, opt_names):
+    """Build the parameter string for the generated __init__."""
+    params = ["self", "session"]
+    for name in pos_names:
+        params.append(f"{name}=None")
+    if opt_names:
+        params.append("*")
+        for name in opt_names:
+            params.append(f"{name}=None")
+    params.append("**kwargs")
+    return ", ".join(params)
+
+
+def _init_body(pos_names, opt_names):
+    """Build the body of the generated __init__."""
+    lines = []
+
+    # Collect positional args, stripping trailing Nones
+    if pos_names:
+        for name in pos_names:
+            lines.append(f"_pos.append({name})")
+        lines.append("while _pos and _pos[-1] is None:")
+        lines.append("    _pos.pop()")
+    else:
+        lines.append("_pos = []")
+
+    # Merge options into kwargs
+    for name in opt_names:
+        lines.append(f"if {name} is not None:")
+        lines.append(f"    kwargs['{name}'] = {name}")
+
+    lines.append("super(_cls, self).__init__(session, *_pos, **kwargs)")
+    return "\n    ".join(lines)
 
 
 def _add_classified_method(attrs, method_name, param_names,
