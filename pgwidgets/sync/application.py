@@ -334,7 +334,15 @@ class Session:
         """Convert wire refs back to Widget instances in return values."""
         if isinstance(val, dict) and "__wid__" in val:
             wid = val["__wid__"]
-            return self._widget_map.get(wid, val)
+            widget = self._widget_map.get(wid)
+            if widget is not None:
+                return widget
+            # Auto-wrap unknown wids (e.g. MenuAction, ToolBarAction
+            # created by add_name/add_action on the JS side).
+            js_class = val.get("__class__", "Widget")
+            widget = Widget(self, wid, js_class)
+            self._widget_map[wid] = widget
+            return widget
         if isinstance(val, list):
             return [self._resolve_return(v) for v in val]
         return val

@@ -50,7 +50,8 @@ class Widget:
         if method in self._FILE_ARG_METHODS:
             args = tuple(self._resolve_file_arg(a) for a in args)
         resolved = [self._session._resolve_arg(a) for a in args]
-        return self._session._call(self._wid, method, *resolved)
+        result = self._session._call(self._wid, method, *resolved)
+        return self._session._resolve_return(result)
 
     def on(self, action, handler, *extra_args, **extra_kwargs):
         """Register a callback. The handler receives
