@@ -60,17 +60,21 @@ in your browser.
 Running the Examples
 --------------------
 
-The repository includes two demo scripts:
+The repository includes several demo scripts:
 
 .. code-block:: bash
 
-   # Synchronous demo
+   # Synchronous demos
    python examples/demo_sync.py
+   python examples/all_widgets.py
 
-   # Asynchronous demo
+   # Asynchronous demos
    python examples/demo_async.py
+   python examples/all_widgets_async.py
 
-Both demos show buttons, text entry, sliders, and drag-and-drop.
+The ``all_widgets`` demos showcase every widget type in an MDI workspace.
+Try refreshing the browser to see automatic UI reconstruction, or open
+the session URL in a second browser tab to see multi-browser synchronization.
 
 Choosing Sync vs Async
 ----------------------
@@ -85,11 +89,13 @@ calls are blocking and return values directly:
    btn.set_text("New text")
 
 The **async** API (``pgwidgets.async_``) requires ``await`` on every widget
-operation:
+operation (except getters, which return from local state):
 
 .. code-block:: python
 
    btn = await Widgets.Button("Click")
    await btn.set_text("New text")
+   text = btn.get_text()  # sync -- no await needed
 
-Both APIs provide identical widget classes and methods.
+Both APIs provide identical widget classes, methods, session persistence,
+reconnection, and multi-browser synchronization.

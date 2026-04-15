@@ -59,16 +59,41 @@ Running
 Session
 -------
 
-The async ``Session`` has the same interface as the sync version, but methods
-are coroutines:
+The async ``Session`` has the same interface as the sync version, but most
+methods are coroutines. Sessions persist independently of browser connections,
+support reconnection and multi-browser synchronization (see :doc:`sync` for
+details on these features).
 
 .. code-block:: python
 
    Widgets = session.get_widgets()          # sync -- returns namespace
    btn = await Widgets.Button("Click me")   # async -- creates widget
    await btn.set_text("New text")           # async -- calls method
+   text = btn.get_text()                    # sync -- returns from local state
    await session.close()                    # async
    timer = await session.make_timer(duration=1000)  # async
+
+**Properties:**
+
+- ``session.id`` -- unique session identifier.
+- ``session.app`` -- the owning ``Application``.
+- ``session.token`` -- security token for reconnection.
+- ``session.is_connected`` -- ``True`` if at least one browser is connected.
+- ``session.connections`` -- list of active WebSocket connections.
+
+**Getter methods** (``get_text()``, ``get_value()``, ``is_visible()``, etc.)
+return from local state without a browser round-trip and do **not** need to
+be awaited. All other widget methods (setters, actions, child methods) are
+coroutines and must be awaited.
+
+Creating Sessions Without a Browser
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   session = app.create_session()
+   # Build widgets -- sends are queued; no browser needed.
+   # Connect a browser later to see the pre-built UI.
 
 Concurrency Modes
 -----------------

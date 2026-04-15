@@ -4,14 +4,17 @@ Asynchronous Application and Session classes.
 Application — starts a WebSocket server and HTTP file server, manages
 session lifecycle.
 
-Session — one per browser connection, owns the widget tree and
-callbacks for that connection.
+Session — owns a widget tree and persists independently of browser
+connections.  Sessions can be created without a browser
+(``Application.create_session()``) and survive disconnections so that
+the UI can be reconstructed when a browser reconnects.
 """
 
 import asyncio
 import json
 import logging
 import mimetypes
+import secrets
 import traceback
 from http.server import SimpleHTTPRequestHandler
 from pathlib import Path
@@ -20,6 +23,12 @@ import websockets
 
 from pgwidgets_js import get_static_path, get_remote_html
 from pgwidgets.defs import WIDGETS
+from pgwidgets.method_types import (
+    SPECIAL_SETTERS, FIXED_SETTERS, CHILD_METHODS as CHILD_METHOD_NAMES,
+    STATE_SYNC_CALLBACKS, STATE_SYNC_REQUIRES_OPTION,
+    WIDGET_CALLBACK_SYNC, POST_CHILDREN_STATE_KEYS, ITEM_LIST_CONFIG,
+    CHILD_CLOSE_CALLBACKS, REPLAY_METHODS, TREE_VIEW_WIDGETS,
+)
 from pgwidgets.async_.widget import Widget, build_all_widget_classes
 
 _CONCURRENCY_MODES = ("serialized", "per_session", "concurrent")
@@ -32,35 +41,55 @@ class _Namespace:
 
 class Session:
     """
-    A single browser connection with its own widget tree (async).
+    A session that owns a widget tree and its associated state.
 
-    Each browser tab that connects gets its own Session.  The session
-    owns the widget map, callback registry, and message-ID counter for
-    that connection.
+    Sessions persist independently of browser connections.  A session
+    can exist with no browser connected (e.g. after a disconnect or
+    when created via ``Application.create_session()``).  One or more
+    browsers can connect to the same session.
 
     Parameters
     ----------
     app : Application
         The owning Application.
-    ws : websockets.WebSocketServerProtocol
-        The WebSocket connection for this session.
-    session_id : int
+    session_id : str or int
         Unique session identifier.
+    ws : websockets.WebSocketServerProtocol or None
+        Initial WebSocket connection, if any.
     """
 
-    def __init__(self, app, ws, session_id):
+    _STATE_KEY_TO_SETTER = {v: k for k, v in SPECIAL_SETTERS.items()}
+    # e.g. {"size": "resize"}
+
+    # State keys handled by fixed-value methods (show/hide)
+    _FIXED_STATE_KEYS = {}
+    for _mname, (_key, _val) in FIXED_SETTERS.items():
+        _FIXED_STATE_KEYS.setdefault(_key, {})[_val] = _mname
+    # e.g. {"visible": {True: "show", False: "hide"}}
+
+    # State keys set by child methods — skip during state replay
+    _CHILD_STATE_KEYS = set()
+
+    def __init__(self, app, session_id, ws=None):
         self._app = app
-        self._ws = ws
         self._id = session_id
+        self._token = secrets.token_urlsafe(32)
+
+        # Active browser connections for this session
+        self._connections = [ws] if ws is not None else []
 
         self._next_id = 1
         self._next_wid = 1
         self._pending = {}       # msg id -> Future
         self._callbacks = {}     # "wid:action" -> handler fn
         self._widget_map = {}    # wid -> Widget instance
+        self._root_widgets = []  # widgets with no parent (creation order)
 
         self._widget_classes = app._widget_classes
         self._transfers = {}     # transfer_id -> transfer state dict
+        self._callback_source_ws = None  # ws that sent current callback
+
+        self._reconstructing = False  # suppress callbacks during reconstruction
 
         # Per-session lock (for "per_session" and "serialized" modes).
         self._cb_lock = None
@@ -74,6 +103,31 @@ class Session:
     def app(self):
         """The Application this session belongs to."""
         return self._app
+
+    @property
+    def token(self):
+        """Security token for reconnection."""
+        return self._token
+
+    @property
+    def is_connected(self):
+        """True if at least one browser is connected."""
+        return len(self._connections) > 0
+
+    @property
+    def connections(self):
+        """List of active WebSocket connections."""
+        return list(self._connections)
+
+    def add_connection(self, ws):
+        """Add a browser connection to this session."""
+        if ws not in self._connections:
+            self._connections.append(ws)
+
+    def remove_connection(self, ws):
+        """Remove a browser connection from this session."""
+        if ws in self._connections:
+            self._connections.remove(ws)
 
     # -- Message handling --
 
@@ -188,6 +242,115 @@ class Session:
 
     def _dispatch_callback(self, wid, action, *args):
         """Dispatch a callback through the configured concurrency mode."""
+        if self._reconstructing:
+            return  # suppress callbacks during reconstruction
+
+        # Auto-sync: some callbacks carry state that should be reflected
+        # in the Python-side widget (e.g. move -> position, resize -> size).
+        state_key = STATE_SYNC_CALLBACKS.get(action)
+        if state_key is not None:
+            widget = self._widget_map.get(wid)
+            if widget is not None:
+                if len(args) == 1 and isinstance(args[0], dict):
+                    d = args[0]
+                    if "width" in d and "height" in d:
+                        new_val = (d["width"], d["height"])
+                        if widget._state.get(state_key) != new_val:
+                            widget._state[state_key] = new_val
+                            self._push(wid, "resize",
+                                       d["width"], d["height"])
+                else:
+                    new_val = tuple(args)
+                    if widget._state.get(state_key) != new_val:
+                        widget._state[state_key] = new_val
+                        setter = (self._STATE_KEY_TO_SETTER.get(state_key)
+                                  or f"set_{state_key}")
+                        self._push(wid, setter, *args)
+                # If this widget wraps a child (e.g. MDISubWindow),
+                # propagate geometry into the parent's children options
+                # so reconstruction replays with the current pos/size.
+                content = getattr(widget, '_child_content', None)
+                if content is not None and content._parent is not None:
+                    for ch, ex_args, _ in content._parent._children:
+                        if ch is content and ex_args:
+                            opts = ex_args[0]
+                            if isinstance(opts, dict):
+                                val = widget._state[state_key]
+                                if state_key == "position":
+                                    opts["x"] = val[0]
+                                    opts["y"] = val[1]
+                                elif state_key == "size":
+                                    opts["width"] = val[0]
+                                    opts["height"] = val[1]
+                            break
+
+        # Per-widget-class sync: e.g. Slider.activated -> value
+        widget = self._widget_map.get(wid)
+        if widget is not None:
+            cls_sync = WIDGET_CALLBACK_SYNC.get(widget._js_class)
+            if cls_sync:
+                spec = cls_sync.get(action)
+                if spec is not None and args:
+                    if isinstance(spec, list):
+                        for idx, skey in spec:
+                            if idx < len(args):
+                                widget._state[skey] = args[idx]
+                    else:
+                        widget._state[spec] = args[0]
+
+        # Tree/table expand/collapse/sort sync from browser interaction
+        if widget is not None and action in ("expanded", "collapsed", "sorted"):
+            if action == "expanded" and len(args) >= 2:
+                path = args[1]
+                collapsed = widget._state.get("_collapsed_paths")
+                if collapsed is not None and collapsed != "_all":
+                    key_path = tuple(path) if isinstance(path, list) else path
+                    collapsed.discard(key_path)
+                self._push(wid, "expand_item", path)
+            elif action == "collapsed" and len(args) >= 2:
+                path = args[1]
+                collapsed = widget._state.setdefault(
+                    "_collapsed_paths", set())
+                if collapsed != "_all":
+                    key_path = tuple(path) if isinstance(path, list) else path
+                    collapsed.add(key_path)
+                self._push(wid, "collapse_item", path)
+            elif action == "sorted" and len(args) >= 2:
+                widget._state["_sort"] = (args[0], args[1])
+                self._push(wid, "sort_by_column", args[0], args[1])
+
+        # Cross-browser sync: push state changes to other browsers
+        if widget is not None and len(self._connections) > 1:
+            cls_sync = WIDGET_CALLBACK_SYNC.get(widget._js_class)
+            if cls_sync:
+                spec = cls_sync.get(action)
+                if spec is not None and args:
+                    if isinstance(spec, list):
+                        for idx, skey in spec:
+                            if idx < len(args):
+                                setter = (self._STATE_KEY_TO_SETTER.get(skey)
+                                          or f"set_{skey}")
+                                self._push(wid, setter, args[idx])
+                    else:
+                        setter = (self._STATE_KEY_TO_SETTER.get(spec)
+                                  or f"set_{spec}")
+                        self._push(wid, setter, args[0])
+
+        # Child-close callbacks (e.g. MDI page-close): remove the
+        # closed child from the parent's _children so it won't be
+        # reconstructed.
+        if action in CHILD_CLOSE_CALLBACKS and args:
+            parent = self._widget_map.get(wid)
+            child = self._resolve_return(args[0])
+            if parent is not None and isinstance(child, Widget):
+                parent._children = [
+                    entry for entry in parent._children
+                    if entry[0] is not child
+                ]
+                child._parent = None
+                self._push(wid, "close_child",
+                           {"__wid__": child._wid})
+
         key = f"{wid}:{action}"
         handler = self._callbacks.get(key)
         if not handler:
@@ -217,15 +380,69 @@ class Session:
                 traceback.print_exc()
 
     async def _send(self, msg):
-        """Send a message and wait for the result."""
+        """Send a message to the primary browser and wait for the result.
+        Secondary browsers receive a fire-and-forget copy.
+        Returns None if no browsers are connected."""
+        if not self._connections:
+            return None
         msg_id = self._next_id
         self._next_id += 1
         msg["id"] = msg_id
         loop = asyncio.get_event_loop()
         future = loop.create_future()
         self._pending[msg_id] = future
-        await self._ws.send(json.dumps(msg))
+        payload = json.dumps(msg)
+        # Primary: wait for result
+        await self._connections[0].send(payload)
+        # Secondary: fire-and-forget with separate id
+        if len(self._connections) > 1:
+            ff_id = self._next_id
+            self._next_id += 1
+            msg_copy = dict(msg, id=ff_id)
+            ff_payload = json.dumps(msg_copy)
+            for ws in self._connections[1:]:
+                asyncio.ensure_future(ws.send(ff_payload))
         return await future
+
+    def _push(self, wid, method, *args):
+        """Push a silent call to all browsers except the callback source.
+        Fire-and-forget: no result is awaited."""
+        source = self._callback_source_ws
+        targets = [ws for ws in self._connections if ws is not source]
+        if not targets:
+            return
+        msg_id = self._next_id
+        self._next_id += 1
+        payload = json.dumps({
+            "type": "call",
+            "id": msg_id,
+            "wid": wid,
+            "method": method,
+            "args": list(args),
+            "silent": True,
+        })
+        for ws in targets:
+            asyncio.ensure_future(ws.send(payload))
+
+    def _fire_and_forget_listen(self, wid, action):
+        """Send a listen message without awaiting a result.
+
+        Used by _resolve_return (which is sync) to register auto-sync
+        listeners.  The callback is already stored locally; this just
+        tells the browser to start sending events.
+        """
+        if not self._connections:
+            return
+        msg_id = self._next_id
+        self._next_id += 1
+        payload = json.dumps({
+            "type": "listen",
+            "id": msg_id,
+            "wid": wid,
+            "action": action,
+        })
+        for ws in self._connections:
+            asyncio.ensure_future(ws.send(payload))
 
     def _alloc_wid(self):
         wid = self._next_wid
@@ -235,7 +452,11 @@ class Session:
     # -- Low-level widget API --
 
     async def _create(self, js_class, *args):
-        """Create a JS widget and return its wid."""
+        """Create a JS widget and return its wid.
+
+        If no browser is connected the widget is still allocated locally
+        and will be created on the browser side during reconstruction.
+        """
         wid = self._alloc_wid()
         resolved = [self._resolve_arg(a) for a in args]
         await self._send({
@@ -247,17 +468,27 @@ class Session:
         return wid
 
     async def _call(self, wid, method, *args):
-        """Call a method on a JS widget."""
+        """Call a method on a JS widget.
+
+        Returns None if no browser is connected.
+        """
         result = await self._send({
             "type": "call",
             "wid": wid,
             "method": method,
             "args": list(args),
         })
+        if result is None:
+            return None
         return result.get("value")
 
     async def _listen(self, wid, action, handler):
-        """Register a callback listener."""
+        """Register a callback listener.
+
+        The handler is always stored locally.  If a browser is connected
+        the listen message is sent immediately; otherwise it will be
+        sent during reconstruction.
+        """
         key = f"{wid}:{action}"
         self._callbacks[key] = handler
         await self._send({
@@ -286,11 +517,34 @@ class Session:
             return {k: self._resolve_arg(v) for k, v in arg.items()}
         return arg
 
-    def _resolve_return(self, val):
-        """Convert wire refs back to Widget instances in return values."""
+    def _resolve_return(self, val, js_class=None):
+        """Convert wire refs back to Widget instances in return values.
+
+        If the wid isn't already tracked (e.g. JS-created MenuAction,
+        ToolBarAction, MDISubWindow), a new Widget wrapper is created
+        on the fly so Python code can call methods on it.
+        """
         if isinstance(val, dict) and "__wid__" in val:
             wid = val["__wid__"]
-            return self._widget_map.get(wid, val)
+            widget = self._widget_map.get(wid)
+            if widget is not None:
+                return widget
+            # Auto-wrap JS-created widgets
+            cls_name = js_class or val.get("__class__")
+            cls = self._widget_classes.get(cls_name, Widget) if cls_name else Widget
+            widget = cls(self, wid, cls_name or "Widget")
+            self._widget_map[wid] = widget
+            # Auto-listen for state-syncing callbacks (move, resize)
+            # so position/size changes are tracked for reconstruction.
+            # Register locally (sync) and send the listen message as
+            # true fire-and-forget (no result awaited) since
+            # _resolve_return is not async.
+            for action in STATE_SYNC_CALLBACKS:
+                key = f"{wid}:{action}"
+                self._callbacks[key] = lambda wid, *a: None
+                widget._auto_sync_actions.add(action)
+                self._fire_and_forget_listen(wid, action)
+            return widget
         if isinstance(val, list):
             return [self._resolve_return(v) for v in val]
         return val
@@ -333,6 +587,19 @@ class Session:
                     widget = widget_cls(session, wid, js_cls)
                     session._widget_map[wid] = widget
 
+                    # Store constructor info for reconstruction
+                    widget._constructor_args = tuple(
+                        args[:len(pos_names)])
+                    widget._constructor_options = dict(options)
+
+                    # Store constructor args as initial state.
+                    for i, name in enumerate(pos_names):
+                        if i < len(args):
+                            widget._state[name] = args[i]
+                    for k, v in options.items():
+                        widget._state[k] = v
+
+                    # apply remaining kwargs as method calls
                     for k, v in kwargs.items():
                         setter = f"set_{k}"
                         if hasattr(widget, setter):
@@ -341,6 +608,45 @@ class Session:
                             raise TypeError(
                                 f"{js_cls}() got unexpected keyword "
                                 f"argument '{k}'")
+
+                    # Auto-listen for callbacks that sync state
+                    opt_names_set = set(widget_defn.get("options", []))
+                    all_callbacks = widget_defn.get("callbacks", [])
+                    for action in STATE_SYNC_CALLBACKS:
+                        req_opt = STATE_SYNC_REQUIRES_OPTION.get(action)
+                        if req_opt and req_opt not in opt_names_set:
+                            continue
+                        if req_opt is None and action not in all_callbacks:
+                            continue
+                        await session._listen(
+                            wid, action, lambda wid, *a: None)
+                        widget._auto_sync_actions.add(action)
+
+                    # Per-widget-class state sync
+                    cls_sync = WIDGET_CALLBACK_SYNC.get(js_cls, {})
+                    for action in cls_sync:
+                        if action not in widget._auto_sync_actions:
+                            await session._listen(
+                                wid, action, lambda wid, *a: None)
+                            widget._auto_sync_actions.add(action)
+
+                    # Auto-listen for child-close callbacks
+                    for action in CHILD_CLOSE_CALLBACKS:
+                        if action in all_callbacks:
+                            await session._listen(
+                                wid, action, lambda wid, *a: None)
+                            widget._auto_sync_actions.add(action)
+
+                    # Auto-listen for tree/table state callbacks
+                    if js_cls in TREE_VIEW_WIDGETS:
+                        for action in ("expanded", "collapsed", "sorted"):
+                            if action not in widget._auto_sync_actions:
+                                await session._listen(
+                                    wid, action, lambda wid, *a: None)
+                                widget._auto_sync_actions.add(action)
+
+                    # Track as root widget
+                    session._root_widgets.append(widget)
 
                     return widget
 
@@ -357,10 +663,230 @@ class Session:
         ns = self.get_widgets()
         return await ns.Timer(duration=duration)
 
+    # -- Widget tree walking --
+
+    def walk_widget_tree(self):
+        """Yield all widgets in creation/tree order (parents before children).
+
+        Starts from root widgets (those with no parent) and recurses
+        depth-first through children.
+        """
+        def _walk(widget):
+            yield widget
+            for child, _args, _meth in widget._children:
+                yield from _walk(child)
+
+        for root in self._root_widgets:
+            yield from _walk(root)
+
+    # -- Reconstruction --
+
+    async def _reconstruct_widget(self, widget):
+        """Replay a single widget's creation, state, and callbacks."""
+        defn = WIDGETS[widget._js_class]
+
+        # 1. Create the widget with its original constructor args
+        js_args = list(widget._constructor_args)
+        if widget._constructor_options:
+            js_args.append(dict(widget._constructor_options))
+        resolved = [self._resolve_arg(a) for a in js_args]
+        await self._send({
+            "type": "create",
+            "wid": widget._wid,
+            "class": widget._js_class,
+            "args": resolved,
+        })
+
+        # Compute which state keys were already set by the constructor
+        constructor_keys = set()
+        pos_names = defn.get("args", [])
+        for i, name in enumerate(pos_names):
+            if i < len(widget._constructor_args):
+                constructor_keys.add(name)
+        for k in widget._constructor_options:
+            constructor_keys.add(k)
+
+        # 2a. Replay item lists (e.g. ComboBox items)
+        item_cfg = ITEM_LIST_CONFIG.get(widget._js_class)
+        if item_cfg:
+            items = widget._state.get(item_cfg["key"], [])
+            append_method = item_cfg["append"]
+            for item in items:
+                await self._call(widget._wid, append_method, item)
+
+        # 2b. Replay state that changed after construction
+        for key, value in widget._state.items():
+            if key in constructor_keys:
+                if key in widget._constructor_options:
+                    if value == widget._constructor_options[key]:
+                        continue
+                else:
+                    idx = pos_names.index(key) if key in pos_names else -1
+                    if (idx >= 0 and idx < len(widget._constructor_args)
+                            and value == widget._constructor_args[idx]):
+                        continue
+
+            if key in self._CHILD_STATE_KEYS:
+                continue
+            if key in self._FIXED_STATE_KEYS:
+                continue
+            if key in POST_CHILDREN_STATE_KEYS:
+                continue
+            if key.startswith("_"):
+                continue
+
+            if key in self._STATE_KEY_TO_SETTER:
+                method_name = self._STATE_KEY_TO_SETTER[key]
+            else:
+                method_name = f"set_{key}"
+
+            if isinstance(value, tuple):
+                await self._call(widget._wid, method_name, *value)
+            else:
+                await self._call(widget._wid, method_name, value)
+
+        # 3. Attach to parent
+        if widget._parent is not None:
+            for child, extra_args, child_method in widget._parent._children:
+                if child is widget:
+                    resolved_widget = self._resolve_arg(widget)
+                    resolved_args = [self._resolve_arg(a) for a in extra_args]
+                    result = await self._call(
+                        widget._parent._wid, child_method,
+                        resolved_widget, *resolved_args)
+                    result = self._resolve_return(result)
+                    if (isinstance(result, Widget) and result is not widget):
+                        result._child_content = widget
+                    break
+
+        # 4. Replay factory calls (e.g. add_action, add_name, add_separator)
+        for i, (meth, call_args, old_widget) in enumerate(
+                widget._replay_calls):
+            resolved = [self._resolve_arg(a) for a in call_args]
+            result = await self._call(widget._wid, meth, *resolved)
+            new_widget = self._resolve_return(result)
+
+            if (isinstance(old_widget, Widget)
+                    and isinstance(new_widget, Widget)):
+                for act, (handler, ea, ek, style) in \
+                        old_widget._registered_callbacks.items():
+                    if style == "on":
+                        await new_widget.on(act, handler, *ea, **ek)
+                    else:
+                        await new_widget.add_callback(act, handler, *ea, **ek)
+                # Replay callback-synced state
+                cls_sync = WIDGET_CALLBACK_SYNC.get(
+                    old_widget._js_class, {})
+                sync_keys = set()
+                for spec in cls_sync.values():
+                    if isinstance(spec, list):
+                        sync_keys.update(k for _, k in spec)
+                    else:
+                        sync_keys.add(spec)
+                for key in sync_keys:
+                    if key in old_widget._state:
+                        value = old_widget._state[key]
+                        setter = f"set_{key}"
+                        if isinstance(value, tuple):
+                            await self._call(new_widget._wid, setter, *value)
+                        else:
+                            await self._call(new_widget._wid, setter, value)
+                        new_widget._state[key] = value
+                # Re-register auto-sync listeners on the new widget
+                for act in cls_sync:
+                    if act not in new_widget._auto_sync_actions:
+                        await self._listen(new_widget._wid, act,
+                                           lambda wid, *a: None)
+                        new_widget._auto_sync_actions.add(act)
+                # Update the replay entry
+                widget._replay_calls[i] = (meth, call_args, new_widget)
+
+        # 5. Re-register callbacks
+        for action, (handler, extra_args, extra_kwargs, style) in \
+                widget._registered_callbacks.items():
+            if style == "on":
+                await widget.on(action, handler, *extra_args, **extra_kwargs)
+            else:
+                await widget.add_callback(action, handler, *extra_args,
+                                          **extra_kwargs)
+
+        # 6. Re-register auto-sync listeners
+        for action in widget._auto_sync_actions:
+            if action not in widget._registered_callbacks:
+                await self._listen(widget._wid, action, lambda wid, *a: None)
+
+    async def reconstruct(self):
+        """Replay the entire widget tree to all connected browsers.
+
+        Walks the widget tree in creation order and for each widget:
+        1. Sends a create message with constructor args
+        2. Replays state changes (setters)
+        3. Attaches children to parents
+        4. Re-registers callbacks
+
+        Sends ``reconstruct-start`` / ``reconstruct-end`` bracket
+        messages so the browser can suppress its own callback dispatch
+        during reconstruction.
+        """
+        # Clean up auto-wrapped widgets from the previous browser session.
+        tree_wids = {w._wid for w in self.walk_widget_tree()}
+        stale = [wid for wid in self._widget_map if wid not in tree_wids]
+        for wid in stale:
+            self._widget_map.pop(wid, None)
+            stale_keys = [k for k in self._callbacks if k.startswith(f"{wid}:")]
+            for k in stale_keys:
+                del self._callbacks[k]
+
+        await self._send({"type": "reconstruct-start",
+                          "next_wid": self._next_wid})
+        for widget in self.walk_widget_tree():
+            await self._reconstruct_widget(widget)
+
+        # Deferred state: replay after the full tree is assembled.
+        for widget in self.walk_widget_tree():
+            # Post-children state (e.g. Splitter sizes)
+            for key, value in widget._state.items():
+                if key not in POST_CHILDREN_STATE_KEYS:
+                    continue
+
+                # Tree/table collapsed paths
+                if key == "_collapsed_paths":
+                    if value == "_all":
+                        await self._call(widget._wid, "collapse_all")
+                    elif isinstance(value, set):
+                        for path in value:
+                            await self._call(widget._wid, "collapse_item",
+                                             list(path))
+                    continue
+
+                # Tree/table sort
+                if key == "_sort":
+                    col, asc = value
+                    await self._call(widget._wid, "sort_by_column", col, asc)
+                    continue
+
+                if key in self._STATE_KEY_TO_SETTER:
+                    method_name = self._STATE_KEY_TO_SETTER[key]
+                else:
+                    method_name = f"set_{key}"
+                if isinstance(value, tuple):
+                    await self._call(widget._wid, method_name, *value)
+                else:
+                    await self._call(widget._wid, method_name, value)
+
+            # Show/hide
+            for key, value in widget._state.items():
+                if key in self._FIXED_STATE_KEYS:
+                    method_name = self._FIXED_STATE_KEYS[key].get(value)
+                    if method_name:
+                        await self._call(widget._wid, method_name)
+
+        await self._send({"type": "reconstruct-end"})
+
     async def close(self):
-        """Close this session's WebSocket connection."""
-        if self._ws is not None:
-            await self._ws.close()
+        """Close all WebSocket connections for this session."""
+        for ws in list(self._connections):
+            await ws.close()
 
     def __repr__(self):
         return f"<Session id={self._id}>"
@@ -504,50 +1030,126 @@ class Application:
     # -- WebSocket handling --
 
     async def _ws_handler(self, ws):
-        # If max_sessions is set, wait for a slot.
-        if self._session_semaphore is not None:
-            await self._session_semaphore.acquire()
-
-        # Allocate session.
-        session_id = self._next_session_id
-        self._next_session_id += 1
-
-        session = Session(self, ws, session_id)
-
-        # Set up per-session lock if needed.
-        if self._concurrency == "per_session":
-            session._cb_lock = asyncio.Lock()
-
-        # Init handshake: reset the browser to a clean slate.
+        # Init handshake: send init, receive ack which may contain
+        # session_id + token for reconnection.
         await ws.send(json.dumps({"type": "init", "id": 0}))
-        await ws.recv()  # wait for ack
+        ack_data = await ws.recv()
+        ack = json.loads(ack_data)
+        reconnect_sid = ack.get("session_id")
+        reconnect_token = ack.get("token")
 
-        self._sessions[session_id] = session
-        self._logger.info(f"Session {session_id} connected.")
+        # Try to reconnect to an existing session.
+        session = None
+        is_reconnect = False
+        if reconnect_sid is not None and reconnect_token is not None:
+            existing = self._sessions.get(reconnect_sid)
+            if existing is not None and existing.token == reconnect_token:
+                session = existing
+                is_reconnect = True
+                self._logger.info(
+                    f"Session {reconnect_sid}: browser reconnecting.")
 
-        # Launch on_connect as a concurrent task so it runs alongside
-        # the message loop below — on_connect sends widget commands
-        # whose responses must be read by the message loop.
-        if self._on_connect:
-            result = self._on_connect(session)
-            if hasattr(result, "__await__"):
-                asyncio.ensure_future(result)
+        if session is None:
+            # New session — acquire a slot if max_sessions is set.
+            if self._session_semaphore is not None:
+                await self._session_semaphore.acquire()
+
+            session_id = self._next_session_id
+            self._next_session_id += 1
+
+            session = Session(self, session_id, ws=ws)
+
+            # Set up per-session lock if needed.
+            if self._concurrency == "per_session":
+                session._cb_lock = asyncio.Lock()
+
+            self._sessions[session_id] = session
+        else:
+            # Reconnecting — add this connection to the existing session.
+            session.add_connection(ws)
+
+        # Send session credentials so the browser can store them.
+        await ws.send(json.dumps({
+            "type": "session-info",
+            "session_id": session.id,
+            "token": session.token,
+        }))
+
+        if is_reconnect:
+            async def do_reconstruct():
+                self._logger.info(
+                    f"Session {session.id}: reconstructing UI.")
+                session._reconstructing = True
+                try:
+                    await session.reconstruct()
+                finally:
+                    session._reconstructing = False
+                self._logger.info(
+                    f"Session {session.id}: reconstruction complete.")
+            asyncio.ensure_future(do_reconstruct())
+        else:
+            self._logger.info(f"Session {session.id} connected.")
+            if self._on_connect:
+                result = self._on_connect(session)
+                if hasattr(result, "__await__"):
+                    asyncio.ensure_future(result)
 
         try:
             async for message in ws:
+                session._callback_source_ws = ws
                 session._handle_message(message)
+                session._callback_source_ws = None
         finally:
-            self._sessions.pop(session_id, None)
+            session.remove_connection(ws)
 
-            self._logger.info(f"Session {session_id} disconnected.")
+            self._logger.info(
+                f"Session {session.id}: browser disconnected "
+                f"({len(session._connections)} remaining).")
 
             if self._on_disconnect:
                 result = self._on_disconnect(session)
                 if hasattr(result, "__await__"):
                     await result
 
-            if self._session_semaphore is not None:
+            # Session stays in self._sessions for potential reconnection.
+            if not is_reconnect and self._session_semaphore is not None:
                 self._session_semaphore.release()
+
+    def create_session(self, session_id=None):
+        """Create a session without a browser connection.
+
+        The session is registered immediately and can have its widget
+        tree built up before any browser connects.  When a browser
+        connects and presents the matching session ID and token, the
+        existing session's UI will be reconstructed in that browser.
+
+        Parameters
+        ----------
+        session_id : str or int or None
+            An explicit session ID.  If None, one is auto-allocated.
+
+        Returns
+        -------
+        Session
+            The newly created session.
+        """
+        if session_id is None:
+            session_id = self._next_session_id
+            self._next_session_id += 1
+        elif session_id in self._sessions:
+            raise ValueError(
+                f"Session {session_id!r} already exists")
+
+        session = Session(self, session_id)
+
+        if self._concurrency == "per_session":
+            session._cb_lock = asyncio.Lock()
+
+        self._sessions[session_id] = session
+
+        self._logger.info(
+            f"Session {session_id} created (no browser).")
+        return session
 
     # -- HTTP server --
 
@@ -564,7 +1166,9 @@ class Application:
                 super().__init__(*a, directory=static_path, **kw)
 
             def do_GET(self):
-                if self.path == "/" or self.path == "/index.html":
+                # Strip query string for path matching (e.g. /?session=1)
+                path = self.path.split("?")[0]
+                if path == "/" or path == "/index.html":
                     html = remote_html.read_text(encoding="utf-8")
                     inject = (
                         f'<script>window.PGWIDGETS_WS_URL'

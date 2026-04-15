@@ -92,6 +92,35 @@ back over WebSocket. Python widget constructors and method calls are
 translated to JSON messages and executed in the browser. Callbacks are
 forwarded back to Python.
 
+## Sessions and Reconnection
+
+Sessions persist independently of browser connections. When a browser
+disconnects (page refresh, network drop, tab close), the session and its
+widget tree remain alive on the Python side. When the browser reconnects,
+the entire UI is automatically reconstructed.
+
+```python
+app = Application(max_sessions=4, logger=logger)
+
+@app.on_connect
+def setup(session):
+    Widgets = session.get_widgets()
+    # Build your UI...
+    # If the browser refreshes, this UI is reconstructed automatically.
+```
+
+**Key features:**
+
+- **Automatic reconstruction** -- refresh the browser and the UI reappears
+  in its current state (widget positions, text, slider values, etc.).
+- **Multi-browser support** -- open the same session URL in a second browser
+  tab or window. Both browsers show the same UI and stay synchronized.
+  Widget state changes (slider moves, tab switches, tree expand/collapse)
+  are pushed to all connected browsers in real time.
+- **Headless sessions** -- create sessions without a browser using
+  `app.create_session()`, build the widget tree, then connect a browser
+  later to see the pre-built UI.
+
 ## License
 
 BSD 3-Clause

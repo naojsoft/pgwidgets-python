@@ -2,7 +2,8 @@
 """
 All Widgets demo for pgwidgets sync API.
 
-Uses an MDI workspace with a picker to open demos for each widget type.
+Uses an MDI workspace with a picker to open demos for each widget
+type.  Interact with widgets, then press F5 to test reconstruction.
 
 Run:  python examples/all_widgets.py
 """
@@ -41,7 +42,8 @@ def on_session(session):
     tile_action.on("activated", lambda: mdi.tile_windows())
 
     # -- Status bar --
-    status = W.Label("Select a widget from the picker to see a demo.")
+    status = W.Label("Select a widget from the picker to see a demo. "
+                     "Press F5 to test reconstruction.")
     status.set_color("#e8f0fe", "#333")
     status.set_padding([4, 8, 4, 8])
     vbox.add_widget(status, 0)
@@ -488,7 +490,8 @@ def on_session(session):
         elif name == "TextArea":
             ta = W.TextArea(
                 "This is a multi-line text area.\n\n"
-                "Edit this text freely.")
+                "Edit this text, then press F5.\n"
+                "The contents should be preserved.")
             mdi.add_widget(ta,
                            {"title": "TextArea", "width": 320,
                             "height": 200,

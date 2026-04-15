@@ -20,6 +20,7 @@ class MockSession:
         self._sent = []
         self._next_id = 1
         self._widget_map = {}
+        self._root_widgets = []
 
     def _call(self, wid, method, *args):
         msg = {
@@ -87,14 +88,16 @@ class TestMethodCalls:
         assert msg["method"] == "set_color"
         assert msg["args"] == ["#fff", "#000"]
 
-    def test_method_with_no_args(self):
+    def test_getter_returns_from_local_state(self):
         session = MockSession()
         label = _make_widget(session, "Label", wid=3)
-        label.get_text()
-
-        msg = session._sent[0]
-        assert msg["method"] == "get_text"
-        assert msg["args"] == []
+        # Getters with matching setters return from local state
+        # without sending a message to the browser.
+        label.set_text("hello")
+        assert label.get_text() == "hello"
+        # Only the set_text call was sent, not get_text
+        assert len(session._sent) == 1
+        assert session._sent[0]["method"] == "set_text"
 
     def test_base_widget_method(self):
         session = MockSession()
@@ -110,7 +113,7 @@ class TestMethodCalls:
         label = _make_widget(session, "Label", wid=1)
         label.set_text("a")
         label.set_text("b")
-        label.get_text()
+        label.set_color("#fff", "#000")
 
         ids = [m["id"] for m in session._sent]
         assert ids == [1, 2, 3]

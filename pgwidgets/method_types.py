@@ -1,0 +1,294 @@
+"""
+Method classification for stateful widget generation.
+
+Categorizes widget methods so the class generator knows which methods
+track state locally, which manage the widget tree, and which are
+fire-and-forget actions.
+
+Categories:
+    SETTER  - stores value in _state, sends to browser
+    GETTER  - returns from _state (no round-trip)
+    CHILD   - manages parent-child relationships
+    ACTION  - fire-and-forget, no state tracking
+    JS_ONLY - browser-only, not meaningful for reconstruction
+"""
+
+SETTER = "setter"
+GETTER = "getter"
+CHILD = "child"
+ACTION = "action"
+JS_ONLY = "js_only"
+
+# -- Explicit overrides (take precedence over conventions) --
+
+# Methods that manage the widget tree.
+# Values: "multi" = appends to children list, "single" = replaces child
+CHILD_METHODS = {
+    "add_widget": "multi",
+    "set_widget": "single",
+    "add_menu": "multi",
+    "add_name": "multi",
+    "add_action": "multi",
+}
+
+# Methods that only make sense in the browser
+JS_ONLY_METHODS = {
+    "get_element", "get_draw_context", "get_video_element",
+    "get_content_element",
+    # Timer runtime queries
+    "is_set", "elapsed_time", "time_left",
+    # TextSource runtime queries
+    "can_undo", "can_redo", "get_cursor", "get_selection",
+    "get_tags_at",
+    # VideoWidget runtime state
+    "get_duration", "get_paused",
+    # TreeView/TableView runtime queries
+    "get_selected", "get_expanded", "get_collapsed",
+    "get_column_count", "get_row_count",
+    "get_widget_at_cell", "get_row_column_count",
+    # Dialog
+    "get_content_area",
+    # ComboBox
+    "get_alpha",
+    # TabWidget lookups
+    "get_tab_id", "get_child", "index_of",
+    # MDIWidget
+    "get_subwin", "get_configuration",
+}
+
+# Action methods: fire-and-forget, no state tracking
+ACTION_METHODS = {
+    "set_focus",
+    # Scrolling
+    "scroll_to_top", "scroll_to_bottom", "scroll_to",
+    "scroll_to_cursor", "scroll_to_path", "scroll_to_end",
+    # Video/media
+    "play", "pause", "stop", "fullscreen",
+    # FileDialog
+    "open", "save",
+    # Menu
+    "popup", "add_separator", "add_spacer",
+    # Tree/table manipulation
+    "expand_all", "collapse_all", "expand_item", "collapse_item",
+    "sort_by_column", "set_optimal_column_widths",
+    "select_path", "select_paths", "select_all",
+    # TextSource editing
+    "insert_text", "delete_range", "create_tag", "remove_tag_def",
+    "apply_tag", "remove_tag", "create_ref", "remove_ref",
+    "set_cursor", "set_selection",
+    "undo", "redo", "find", "find_all", "replace",
+    # Canvas
+    "update", "draw_image",
+    # Layout actions
+    "cascade_windows", "tile_windows",
+    "toggleContent",
+    "raise_", "lower",
+    # Timer
+    "start", "cancel",
+    # Table/Tree row-level modifications (tracked via bulk set_data)
+    "add_item", "remove_item", "update_tree", "remove_items",
+    "insert_row", "append_row", "delete_row",
+    "insert_column", "append_column", "delete_column",
+    "set_cell",
+    # ComboBox item manipulation (tracked via bulk state)
+    "append_text", "insert_alpha", "delete_alpha",
+    # TabWidget/MDI child management
+    "show_widget", "close_widget", "close_child",
+    "highlight_tab",
+    # Splitter per-child
+    "set_minimum_size",
+    # TreeView per-column
+    "set_column_width", "set_column_editable",
+    # TextSource per-line
+    "set_icon",
+}
+
+# Setter methods that DON'T follow the set_* naming convention.
+# Maps method_name -> state_key
+SPECIAL_SETTERS = {
+    "resize": "size",
+}
+
+# Setter methods with fixed values (no parameters).
+# Maps method_name -> (state_key, value)
+FIXED_SETTERS = {
+    "show": ("visible", True),
+    "hide": ("visible", False),
+}
+
+# Getter methods that DON'T follow the get_* naming convention.
+# Maps method_name -> state_key
+SPECIAL_GETTERS = {
+    "is_visible": "visible",
+}
+
+# Callbacks whose args should automatically update widget state on
+# the Python side.  Maps callback action -> state_key.
+# When the browser fires one of these, the args are stored as a
+# tuple in widget._state[state_key] so reconstruction can replay.
+STATE_SYNC_CALLBACKS = {
+    "move": "position",
+    "resize": "size",
+}
+
+# Auto-sync callbacks that should only be listened for on widgets
+# whose definition includes certain options.  Maps callback action
+# to the required option name.
+STATE_SYNC_REQUIRES_OPTION = {
+    "resize": "resizable",
+}
+
+# Per-widget-class state sync from browser callbacks.
+# When the browser fires a callback listed here, args are stored in
+# widget._state so reconstruction can replay the current state.
+#
+# Value is either a single state_key (syncs args[0]) or a list of
+# (arg_index, state_key) tuples for multi-arg callbacks.
+#
+# Maps widget_class -> {callback_action: state_key | [(idx, key), ...]}
+WIDGET_CALLBACK_SYNC = {
+    "Slider": {"activated": "value"},
+    "SpinBox": {"activated": "value"},
+    "Dial": {"activated": "value"},
+    "CheckBox": {"activated": "state"},
+    "RadioButton": {"activated": "state"},
+    "ToggleButton": {"activated": "state"},
+    "TextEntry": {"activated": "text", "modified": "text"},
+    "TextEntrySet": {"activated": "text", "modified": "text"},
+    "TextArea": {"activated": "text", "modified": "text"},
+    "ComboBox": {"activated": [(0, "index"), (1, "text")],
+                 "modified": "text"},
+    "Splitter": {"sizing": "sizes"},
+    "Expander": {"toggled": "collapsed"},
+    "ToolBarAction": {"activated": "state"},
+    "TabWidget": {"page-switch": [(1, "index")]},
+    "StackWidget": {"page-switch": [(1, "index")]},
+}
+
+# Container callbacks that manage the child list automatically.
+# When the browser fires one of these, the Python side removes the
+# child from _children so it won't be reconstructed.
+# Maps callback action -> argument interpretation.
+CHILD_CLOSE_CALLBACKS = {
+    "page-close",   # MDIWidget: arg is the content child widget
+}
+
+# Methods that create content from non-Widget args and must be
+# replayed during reconstruction.  These are typically factory methods
+# (add_action, add_name) that return auto-wrapped JS widgets, plus
+# layout modifiers (add_separator, add_spacer) whose order matters.
+# Calls are recorded in widget._replay_calls as
+# (method_name, args, returned_widget_or_None).
+REPLAY_METHODS = {
+    "add_name", "add_action", "add_separator", "add_spacer",
+}
+
+# Methods that select a child and should track the index in _state.
+# Maps method_name -> state_key.  When called with a Widget arg, the
+# child's position in _children is stored as the index.
+CHILD_SELECT_METHODS = {
+    "show_widget": "index",
+}
+
+# State keys that must be replayed AFTER children are attached
+# (e.g. Splitter.set_sizes needs panes to already exist).
+POST_CHILDREN_STATE_KEYS = {"sizes", "index", "_collapsed_paths", "_sort"}
+
+# Widgets with incrementally-built item lists.
+# These action methods are wrapped to maintain _state["_items"].
+# During reconstruction the items are replayed via the "append" method.
+ITEM_LIST_CONFIG = {
+    "ComboBox": {
+        "key": "_items",
+        "append": "append_text",     # method(text)
+        "insert": "insert_alpha",    # method(text, index)
+        "delete": "delete_alpha",    # method(index)
+    },
+}
+
+# Widgets that track expand/collapse and sort state.
+# These action methods are overridden to maintain _state keys that
+# are replayed during reconstruction.
+TREE_VIEW_WIDGETS = {"TreeView", "TableView"}
+
+# clear() resets these state keys per widget type.
+# If a widget is not listed, clear() is treated as a plain action.
+CLEAR_RESETS = {
+    "TextEntry": ["text"],
+    "TextEntrySet": ["text"],
+    "TextArea": ["text"],
+    "TextSource": ["text"],
+    "ComboBox": ["text", "index", "_items"],
+    "TreeView": ["tree", "data", "columns", "_collapsed_paths", "_sort"],
+    "TableView": ["rows", "data", "columns", "_collapsed_paths", "_sort"],
+    "HtmlView": ["html"],
+    "ExternalWidget": ["content"],
+}
+
+
+def _state_key_for_setter(method_name):
+    """Derive the state key from a set_* method name."""
+    if method_name in SPECIAL_SETTERS:
+        return SPECIAL_SETTERS[method_name]
+    if method_name in FIXED_SETTERS:
+        return FIXED_SETTERS[method_name][0]
+    if method_name.startswith("set_"):
+        return method_name[4:]
+    return None
+
+
+def _state_key_for_getter(method_name):
+    """Derive the state key from a get_* or special getter."""
+    if method_name in SPECIAL_GETTERS:
+        return SPECIAL_GETTERS[method_name]
+    if method_name.startswith("get_"):
+        return method_name[4:]
+    return None
+
+
+def classify_method(method_name, param_names, all_methods):
+    """Classify a widget method.
+
+    Returns (category, state_key) where state_key is the key into
+    _state for setters/getters, or None for other categories.
+    """
+    # Explicit overrides first
+    if method_name in CHILD_METHODS:
+        return CHILD, CHILD_METHODS[method_name]
+    if method_name in JS_ONLY_METHODS:
+        return JS_ONLY, None
+    if method_name in ACTION_METHODS:
+        return ACTION, None
+
+    # Fixed-value setters (show, hide)
+    if method_name in FIXED_SETTERS:
+        key, _ = FIXED_SETTERS[method_name]
+        return SETTER, key
+
+    # Special setters (resize)
+    if method_name in SPECIAL_SETTERS:
+        return SETTER, SPECIAL_SETTERS[method_name]
+
+    # Special getters (is_visible)
+    if method_name in SPECIAL_GETTERS:
+        return GETTER, SPECIAL_GETTERS[method_name]
+
+    # Convention: set_X with params -> setter
+    if method_name.startswith("set_") and param_names:
+        return SETTER, method_name[4:]
+
+    # Convention: get_X with no params and matching set_X -> getter
+    if method_name.startswith("get_") and not param_names:
+        key = method_name[4:]
+        setter = f"set_{key}"
+        if setter in all_methods:
+            return GETTER, key
+        # No matching setter — treat as JS-only query
+        return JS_ONLY, None
+
+    # clear() is special — handled by the generator using CLEAR_RESETS
+    if method_name == "clear":
+        return ACTION, None
+
+    # Default: action
+    return ACTION, None
