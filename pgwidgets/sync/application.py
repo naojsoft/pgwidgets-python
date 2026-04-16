@@ -1116,6 +1116,13 @@ class Application:
                 is_reconnect = True
                 self._logger.info(
                     f"Session {reconnect_sid}: browser reconnecting.")
+            else:
+                # Credentials were provided but invalid — reject.
+                self._logger.warning(
+                    f"Rejected connection: invalid session credentials "
+                    f"(session_id={reconnect_sid}).")
+                await ws.close(4001, "Invalid session credentials")
+                return
 
         if session is None:
             # New session — acquire a slot if max_sessions is set.

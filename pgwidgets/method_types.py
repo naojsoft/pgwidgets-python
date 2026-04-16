@@ -148,6 +148,7 @@ STATE_SYNC_REQUIRES_OPTION = {
 #
 # Maps widget_class -> {callback_action: state_key | [(idx, key), ...]}
 WIDGET_CALLBACK_SYNC = {
+    "ScrollBar": {"activated": "scroll_percent"},
     "Slider": {"activated": "value"},
     "SpinBox": {"activated": "value"},
     "Dial": {"activated": "value"},
