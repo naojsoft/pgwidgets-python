@@ -86,10 +86,10 @@ class Session:
         Initial WebSocket connection, if any.
     """
 
-    def __init__(self, app, session_id, ws=None):
+    def __init__(self, app, session_id, ws=None, token=None):
         self._app = app
         self._id = session_id
-        self._token = secrets.token_urlsafe(32)
+        self._token = token if token is not None else secrets.token_urlsafe(32)
 
         # Active browser connections for this session
         self._connections = [ws] if ws is not None else []
@@ -1194,7 +1194,7 @@ class Application:
             if not is_reconnect and self._session_semaphore is not None:
                 self._session_semaphore.release()
 
-    def create_session(self, session_id=None):
+    def create_session(self, session_id=None, token=None):
         """Create a session without a browser connection.
 
         The session is registered immediately and can have its widget
@@ -1206,6 +1206,9 @@ class Application:
         ----------
         session_id : str or int or None
             An explicit session ID.  If None, one is auto-allocated.
+        token : str or None
+            An explicit security token for reconnection.  If None, one
+            is auto-generated.
 
         Returns
         -------
@@ -1220,7 +1223,7 @@ class Application:
                 raise ValueError(
                     f"Session {session_id!r} already exists")
 
-        session = Session(self, session_id)
+        session = Session(self, session_id, token=token)
 
         # Start per-session callback thread if needed.
         if self._concurrency == "per_session":
