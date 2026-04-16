@@ -516,9 +516,11 @@ def _add_tree_view_methods(attrs, all_methods):
             args = _resolve_kwargs("expand_item", param_names, args, kwargs)
             path = args[0] if args else None
             if path is not None:
+                key = tuple(path) if isinstance(path, list) else path
+                expanded = self._state.setdefault("_expanded_paths", set())
+                expanded.add(key)
                 collapsed = self._state.get("_collapsed_paths")
-                if collapsed is not None:
-                    key = tuple(path) if isinstance(path, list) else path
+                if collapsed is not None and collapsed != "_all":
                     collapsed.discard(key)
             return self._call("expand_item", *args)
         expand_item_method.__name__ = "expand_item"
@@ -530,9 +532,13 @@ def _add_tree_view_methods(attrs, all_methods):
             args = _resolve_kwargs("collapse_item", param_names, args, kwargs)
             path = args[0] if args else None
             if path is not None:
-                collapsed = self._state.setdefault("_collapsed_paths", set())
                 key = tuple(path) if isinstance(path, list) else path
-                collapsed.add(key)
+                expanded = self._state.get("_expanded_paths")
+                if expanded is not None:
+                    expanded.discard(key)
+                collapsed = self._state.setdefault("_collapsed_paths", set())
+                if collapsed != "_all":
+                    collapsed.add(key)
             return self._call("collapse_item", *args)
         collapse_item_method.__name__ = "collapse_item"
         attrs["collapse_item"] = collapse_item_method
@@ -540,14 +546,15 @@ def _add_tree_view_methods(attrs, all_methods):
     if "expand_all" in all_methods:
         def expand_all_method(self):
             self._state.pop("_collapsed_paths", None)
+            self._state["_expanded_paths"] = "_all"
             return self._call("expand_all")
         expand_all_method.__name__ = "expand_all"
         attrs["expand_all"] = expand_all_method
 
     if "collapse_all" in all_methods:
         def collapse_all_method(self):
-            # Mark all as collapsed — use sentinel value
             self._state["_collapsed_paths"] = "_all"
+            self._state.pop("_expanded_paths", None)
             return self._call("collapse_all")
         collapse_all_method.__name__ = "collapse_all"
         attrs["collapse_all"] = collapse_all_method

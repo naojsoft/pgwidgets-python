@@ -342,17 +342,23 @@ class Session:
         if widget is not None and action in ("expanded", "collapsed", "sorted"):
             if action == "expanded" and len(args) >= 2:
                 path = args[1]
+                key_path = tuple(path) if isinstance(path, list) else path
+                expanded = widget._state.setdefault(
+                    "_expanded_paths", set())
+                expanded.add(key_path)
                 collapsed = widget._state.get("_collapsed_paths")
                 if collapsed is not None and collapsed != "_all":
-                    key_path = tuple(path) if isinstance(path, list) else path
                     collapsed.discard(key_path)
                 self._push(wid, "expand_item", path)
             elif action == "collapsed" and len(args) >= 2:
                 path = args[1]
+                key_path = tuple(path) if isinstance(path, list) else path
+                expanded = widget._state.get("_expanded_paths")
+                if expanded is not None:
+                    expanded.discard(key_path)
                 collapsed = widget._state.setdefault(
                     "_collapsed_paths", set())
                 if collapsed != "_all":
-                    key_path = tuple(path) if isinstance(path, list) else path
                     collapsed.add(key_path)
                 self._push(wid, "collapse_item", path)
             elif action == "sorted" and len(args) >= 2:
@@ -872,6 +878,16 @@ class Session:
             # Post-children state (e.g. Splitter sizes)
             for key, value in widget._state.items():
                 if key not in POST_CHILDREN_STATE_KEYS:
+                    continue
+
+                # Tree/table expanded paths
+                if key == "_expanded_paths":
+                    if value == "_all":
+                        self._call(widget._wid, "expand_all")
+                    elif isinstance(value, set):
+                        for path in value:
+                            self._call(widget._wid, "expand_item",
+                                       list(path))
                     continue
 
                 # Tree/table collapsed paths

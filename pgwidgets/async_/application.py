@@ -303,17 +303,23 @@ class Session:
         if widget is not None and action in ("expanded", "collapsed", "sorted"):
             if action == "expanded" and len(args) >= 2:
                 path = args[1]
+                key_path = tuple(path) if isinstance(path, list) else path
+                expanded = widget._state.setdefault(
+                    "_expanded_paths", set())
+                expanded.add(key_path)
                 collapsed = widget._state.get("_collapsed_paths")
                 if collapsed is not None and collapsed != "_all":
-                    key_path = tuple(path) if isinstance(path, list) else path
                     collapsed.discard(key_path)
                 self._push(wid, "expand_item", path)
             elif action == "collapsed" and len(args) >= 2:
                 path = args[1]
+                key_path = tuple(path) if isinstance(path, list) else path
+                expanded = widget._state.get("_expanded_paths")
+                if expanded is not None:
+                    expanded.discard(key_path)
                 collapsed = widget._state.setdefault(
                     "_collapsed_paths", set())
                 if collapsed != "_all":
-                    key_path = tuple(path) if isinstance(path, list) else path
                     collapsed.add(key_path)
                 self._push(wid, "collapse_item", path)
             elif action == "sorted" and len(args) >= 2:
@@ -404,6 +410,7 @@ class Session:
             for ws in self._connections[1:]:
                 asyncio.ensure_future(ws.send(ff_payload))
         return await future
+
 
     def _push(self, wid, method, *args):
         """Push a silent call to all browsers except the callback source.
@@ -747,6 +754,8 @@ class Session:
         Sends ``reconstruct-start`` / ``reconstruct-end`` bracket
         messages so the browser can suppress its own callback dispatch
         during reconstruction.
+
+        This is called when a browser reconnects to an existing session.
         """
         # Clean up auto-wrapped widgets from the previous browser session.
         tree_wids = {w._wid for w in self.walk_widget_tree()}
@@ -767,6 +776,16 @@ class Session:
             # Post-children state (e.g. Splitter sizes)
             for key, value in widget._state.items():
                 if key not in POST_CHILDREN_STATE_KEYS:
+                    continue
+
+                # Tree/table expanded paths
+                if key == "_expanded_paths":
+                    if value == "_all":
+                        await self._call(widget._wid, "expand_all")
+                    elif isinstance(value, set):
+                        for path in value:
+                            await self._call(widget._wid, "expand_item",
+                                             list(path))
                     continue
 
                 # Tree/table collapsed paths

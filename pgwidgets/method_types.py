@@ -129,6 +129,7 @@ SPECIAL_GETTERS = {
 STATE_SYNC_CALLBACKS = {
     "move": "position",
     "resize": "size",
+    "scrolled": "scroll_position",
 }
 
 # Auto-sync callbacks that should only be listened for on widgets
@@ -192,7 +193,8 @@ CHILD_SELECT_METHODS = {
 
 # State keys that must be replayed AFTER children are attached
 # (e.g. Splitter.set_sizes needs panes to already exist).
-POST_CHILDREN_STATE_KEYS = {"sizes", "index", "_collapsed_paths", "_sort"}
+POST_CHILDREN_STATE_KEYS = {"sizes", "index", "_collapsed_paths",
+                            "_expanded_paths", "_sort", "scroll_position"}
 
 # Widgets with incrementally-built item lists.
 # These action methods are wrapped to maintain _state["_items"].
