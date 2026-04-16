@@ -120,6 +120,7 @@ FIXED_SETTERS = {
 # Maps method_name -> state_key
 SPECIAL_GETTERS = {
     "is_visible": "visible",
+    "get_size": "size",
 }
 
 # Callbacks whose args should automatically update widget state on
