@@ -470,7 +470,7 @@ async def main():
                         "Department",
                         {"label": "Salary", "type": "number"},
                     ],
-                    selection_mode="multi",
+                    selection_mode="multiple",
                     alternate_row_colors=True,
                 )
                 await table.set_rows([
@@ -649,7 +649,7 @@ async def main():
                         "Type",
                         {"label": "Size (KB)", "type": "number"},
                     ],
-                    selection_mode="multi",
+                    selection_mode="multiple",
                     alternate_row_colors=True,
                 )
                 await tree.set_tree([

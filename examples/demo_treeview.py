@@ -33,7 +33,7 @@ def on_session(session):
             "Type",
             {"label": "Size (KB)", "type": "number"},
         ],
-        selection_mode="multi",
+        selection_mode="multiple",
         alternate_row_colors=True,
     )
 

@@ -92,7 +92,13 @@ class Widget:
                 options[k] = kwargs.pop(k)
 
         if options:
+            # Keep positional slots so the options dict doesn't slide
+            # into a positional arg position on the JS side
             js_args.append(options)
+        else:
+            # Strip trailing Nones when no options follow
+            while js_args and js_args[-1] is None:
+                js_args.pop()
 
         # Allocate wid and create on JS side
         wid = session._create(js_class, *js_args)
@@ -253,14 +259,33 @@ class Widget:
         self._session._listen(self._wid, action, wrapper)
 
     @staticmethod
-    def _to_data_uri(path):
-        """Convert a file path to a data URI."""
+    def to_data_uri(path):
+        """Convert a local file path to a ``data:`` URI.
+
+        Reads the file, base64-encodes its contents, and returns a
+        string like ``data:image/png;base64,iVBOR...`` that can be
+        passed directly to methods such as ``set_image()`` or
+        ``set_icon()``.
+
+        Parameters
+        ----------
+        path : str
+            Path to a local file.
+
+        Returns
+        -------
+        str
+            A data URI containing the file contents.
+        """
         mime, _ = mimetypes.guess_type(path)
         if mime is None:
             mime = 'application/octet-stream'
         with open(path, 'rb') as f:
             data = base64.b64encode(f.read()).decode('ascii')
         return f"data:{mime};base64,{data}"
+
+    # Keep private alias for internal use
+    _to_data_uri = to_data_uri
 
     def add_cursor(self, name, url, hotspot_x, hotspot_y, size=None):
         """Register a named custom cursor. If url is a local file path
@@ -505,9 +530,16 @@ def _add_item_list_methods(attrs, item_cfg, all_methods):
             def method(self, *args, **kwargs):
                 args = _resolve_kwargs(mn, pn, args, kwargs)
                 items = self._state.get(key, [])
-                idx = args[0]
-                if 0 <= idx < len(items):
-                    items.pop(idx)
+                val = args[0]
+                if isinstance(val, int):
+                    if 0 <= val < len(items):
+                        items.pop(val)
+                else:
+                    # Delete by value (e.g. delete_alpha takes text)
+                    try:
+                        items.remove(val)
+                    except ValueError:
+                        pass
                 return self._call(mn, *args)
             method.__name__ = mn
             return method
@@ -652,12 +684,11 @@ def _init_body(pos_names, opt_names):
     """Build the body of the generated __init__."""
     lines = []
 
-    # Collect positional args, stripping trailing Nones
+    # Collect positional args (trailing Nones are stripped later in
+    # Widget.__init__ only when no options dict follows)
     if pos_names:
         for name in pos_names:
             lines.append(f"_pos.append({name})")
-        lines.append("while _pos and _pos[-1] is None:")
-        lines.append("    _pos.pop()")
     else:
         lines.append("_pos = []")
 

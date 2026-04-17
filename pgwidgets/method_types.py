@@ -54,6 +54,8 @@ JS_ONLY_METHODS = {
     "get_tab_id", "get_child", "index_of",
     # MDIWidget
     "get_subwin", "get_configuration",
+    # Button icon (set_icon is an action, so get_icon must round-trip)
+    "get_icon",
 }
 
 # Action methods: fire-and-forget, no state tracking

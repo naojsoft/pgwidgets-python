@@ -42,6 +42,7 @@ familiar Qt/GTK-style API.
    widgets
    subclassing
    callbacks
+   utilities
 
 .. toctree::
    :maxdepth: 2
