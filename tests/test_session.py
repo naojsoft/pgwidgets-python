@@ -202,7 +202,17 @@ class TestNoConnectionOperation:
         handler = lambda *args: None
         s._listen(1, "activated", handler)
         assert "1:activated" in s._callbacks
-        assert s._callbacks["1:activated"] is handler
+        assert handler in s._callbacks["1:activated"]
+
+    def test_listen_multiple_handlers(self):
+        s = self._make_session()
+        h1 = lambda *args: None
+        h2 = lambda *args: None
+        s._listen(1, "activated", h1)
+        s._listen(1, "activated", h2)
+        assert len(s._callbacks["1:activated"]) == 2
+        assert h1 in s._callbacks["1:activated"]
+        assert h2 in s._callbacks["1:activated"]
 
     def test_unlisten_removes_handler_no_connection(self):
         s = self._make_session()
@@ -328,7 +338,7 @@ class TestCallbackSuppression:
         s = app.create_session()
         # Register a handler
         called = []
-        s._callbacks["1:activated"] = lambda wid, *args: called.append(True)
+        s._callbacks["1:activated"] = [lambda wid, *args: called.append(True)]
         # Should dispatch normally
         s._dispatch_callback(1, "activated")
         assert len(called) == 1

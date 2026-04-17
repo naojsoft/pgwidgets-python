@@ -186,6 +186,18 @@ REPLAY_METHODS = {
     "add_name", "add_action", "add_separator", "add_spacer",
 }
 
+# Factory methods that create and return a new widget on the JS side.
+# When called with no browser connected, a local proxy of the correct
+# class is created so the caller can continue building the widget tree.
+# Maps (parent_class, method_name) -> returned JS class name.
+FACTORY_RETURN_TYPES = {
+    ("MenuBar", "add_name"): "Menu",
+    ("MenuBar", "add_menu"): "Menu",
+    ("Menu", "add_name"): "MenuAction",
+    ("Menu", "add_menu"): "Menu",
+    ("ToolBar", "add_action"): "ToolBarAction",
+}
+
 # Methods that select a child and should track the index in _state.
 # Maps method_name -> state_key.  When called with a Widget arg, the
 # child's position in _children is stored as the index.

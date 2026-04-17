@@ -272,7 +272,9 @@ class TestCallbackTracking:
         btn.on("activated", handler)
 
         assert "activated" in btn._registered_callbacks
-        h, extra_args, extra_kwargs, style = btn._registered_callbacks["activated"]
+        entries = btn._registered_callbacks["activated"]
+        assert len(entries) == 1
+        h, extra_args, extra_kwargs, style = entries[0]
         assert h is handler
         assert style == "on"
 
@@ -282,7 +284,8 @@ class TestCallbackTracking:
         handler = lambda w: None
         btn.add_callback("activated", handler)
 
-        h, extra_args, extra_kwargs, style = btn._registered_callbacks["activated"]
+        entries = btn._registered_callbacks["activated"]
+        h, extra_args, extra_kwargs, style = entries[0]
         assert h is handler
         assert style == "add_callback"
 
@@ -292,9 +295,25 @@ class TestCallbackTracking:
         handler = lambda x, y: None
         btn.on("activated", handler, "extra1", key="val")
 
-        h, extra_args, extra_kwargs, style = btn._registered_callbacks["activated"]
+        entries = btn._registered_callbacks["activated"]
+        h, extra_args, extra_kwargs, style = entries[0]
         assert extra_args == ("extra1",)
         assert extra_kwargs == {"key": "val"}
+
+    def test_multiple_callbacks_same_action(self):
+        s = MockSession()
+        btn = _make(s, "Button", 1)
+        h1 = lambda: None
+        h2 = lambda w: None
+        btn.on("activated", h1)
+        btn.add_callback("activated", h2)
+
+        entries = btn._registered_callbacks["activated"]
+        assert len(entries) == 2
+        assert entries[0][0] is h1
+        assert entries[0][3] == "on"
+        assert entries[1][0] is h2
+        assert entries[1][3] == "add_callback"
 
 
 # -- Constructor state --

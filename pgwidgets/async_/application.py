@@ -82,7 +82,7 @@ class Session:
         self._next_id = 1
         self._next_wid = 1
         self._pending = {}       # msg id -> Future
-        self._callbacks = {}     # "wid:action" -> handler fn
+        self._callbacks = {}     # "wid:action" -> [handler, ...]
         self._widget_map = {}    # wid -> Widget instance
         self._root_widgets = []  # widgets with no parent (creation order)
 
@@ -359,21 +359,22 @@ class Session:
                            {"__wid__": child._wid})
 
         key = f"{wid}:{action}"
-        handler = self._callbacks.get(key)
-        if not handler:
+        handlers = self._callbacks.get(key)
+        if not handlers:
             return
         cb_args = (wid, *args)
         mode = self._app._concurrency
-        if mode == "concurrent":
-            asyncio.ensure_future(handler(*cb_args))
-        elif mode == "per_session":
-            asyncio.ensure_future(
-                self._serialized_dispatch(
-                    handler, cb_args, self._cb_lock))
-        else:  # serialized
-            asyncio.ensure_future(
-                self._serialized_dispatch(
-                    handler, cb_args, self._app._cb_lock))
+        for handler in handlers:
+            if mode == "concurrent":
+                asyncio.ensure_future(handler(*cb_args))
+            elif mode == "per_session":
+                asyncio.ensure_future(
+                    self._serialized_dispatch(
+                        handler, cb_args, self._cb_lock))
+            else:  # serialized
+                asyncio.ensure_future(
+                    self._serialized_dispatch(
+                        handler, cb_args, self._app._cb_lock))
 
     @staticmethod
     async def _serialized_dispatch(handler, args, lock):
@@ -493,27 +494,53 @@ class Session:
     async def _listen(self, wid, action, handler):
         """Register a callback listener.
 
-        The handler is always stored locally.  If a browser is connected
-        the listen message is sent immediately; otherwise it will be
-        sent during reconstruction.
+        Multiple handlers can be registered for the same action; all
+        will be invoked when the callback fires.  The "listen" message
+        is only sent to the browser for the first handler on a given
+        action (the JS side already supports multiple listeners).
         """
         key = f"{wid}:{action}"
-        self._callbacks[key] = handler
-        await self._send({
-            "type": "listen",
-            "wid": wid,
-            "action": action,
-        })
+        handlers = self._callbacks.get(key)
+        if handlers is None:
+            self._callbacks[key] = [handler]
+            await self._send({
+                "type": "listen",
+                "wid": wid,
+                "action": action,
+            })
+        else:
+            handlers.append(handler)
 
-    async def _unlisten(self, wid, action):
-        """Remove a callback listener."""
+    async def _unlisten(self, wid, action, handler=None):
+        """Remove callback listener(s).
+
+        If *handler* is given, only that handler is removed.  If it was
+        the last handler for this action the "unlisten" message is sent
+        to the browser.  If *handler* is None, all handlers for this
+        action are removed.
+        """
         key = f"{wid}:{action}"
-        self._callbacks.pop(key, None)
-        await self._send({
-            "type": "unlisten",
-            "wid": wid,
-            "action": action,
-        })
+        if handler is None:
+            self._callbacks.pop(key, None)
+            await self._send({
+                "type": "unlisten",
+                "wid": wid,
+                "action": action,
+            })
+        else:
+            handlers = self._callbacks.get(key)
+            if handlers is not None:
+                try:
+                    handlers.remove(handler)
+                except ValueError:
+                    pass
+                if not handlers:
+                    del self._callbacks[key]
+                    await self._send({
+                        "type": "unlisten",
+                        "wid": wid,
+                        "action": action,
+                    })
 
     def _resolve_arg(self, arg):
         """Convert Widget instances to wire refs in outgoing args."""
@@ -549,9 +576,10 @@ class Session:
             # _resolve_return is not async.
             for action in STATE_SYNC_CALLBACKS:
                 key = f"{wid}:{action}"
-                self._callbacks[key] = lambda wid, *a: None
+                if key not in self._callbacks:
+                    self._callbacks[key] = [lambda wid, *a: None]
+                    self._fire_and_forget_listen(wid, action)
                 widget._auto_sync_actions.add(action)
-                self._fire_and_forget_listen(wid, action)
             return widget
         if isinstance(val, list):
             return [self._resolve_return(v) for v in val]
@@ -607,6 +635,84 @@ class Session:
             yield from _walk(root)
 
     # -- Reconstruction --
+
+    async def _transfer_proxy(self, old_widget, new_widget):
+        """Transfer callbacks and synced state from an old (proxy) widget
+        to a newly created real widget after a factory call replay."""
+        if not (isinstance(old_widget, Widget)
+                and isinstance(new_widget, Widget)):
+            return
+        # Transfer user-registered callbacks
+        for act, entries in old_widget._registered_callbacks.items():
+            for handler, ea, ek, style in entries:
+                if style == "on":
+                    await new_widget.on(act, handler, *ea, **ek)
+                else:
+                    await new_widget.add_callback(act, handler, *ea, **ek)
+        # Replay callback-synced state (e.g. ToolBarAction toggle state)
+        cls_sync = WIDGET_CALLBACK_SYNC.get(old_widget._js_class, {})
+        sync_keys = set()
+        for spec in cls_sync.values():
+            if isinstance(spec, list):
+                sync_keys.update(k for _, k in spec)
+            else:
+                sync_keys.add(spec)
+        for key in sync_keys:
+            if key in old_widget._state:
+                value = old_widget._state[key]
+                setter = f"set_{key}"
+                if isinstance(value, tuple):
+                    await self._call(new_widget._wid, setter, *value)
+                else:
+                    await self._call(new_widget._wid, setter, value)
+                new_widget._state[key] = value
+        # Re-register auto-sync listeners on the new widget
+        for act in cls_sync:
+            if act not in new_widget._auto_sync_actions:
+                await self._listen(new_widget._wid, act,
+                                   lambda wid, *a: None)
+                new_widget._auto_sync_actions.add(act)
+
+    async def _replay_factory_calls(self, widget):
+        """Replay factory calls (add_action, add_name, etc.) and
+        recursively replay any sub-tree that was built on proxy widgets
+        before a browser was connected."""
+        for i, (meth, call_args, old_widget) in enumerate(
+                widget._replay_calls):
+            resolved = [self._resolve_arg(a) for a in call_args]
+            result = await self._call(widget._wid, meth, *resolved)
+            new_widget = self._resolve_return(result)
+
+            await self._transfer_proxy(old_widget, new_widget)
+
+            # Recursively replay any sub-tree the proxy accumulated
+            if (isinstance(old_widget, Widget)
+                    and isinstance(new_widget, Widget)):
+                if old_widget._replay_calls:
+                    new_widget._replay_calls = []
+                    await self._replay_factory_calls_from(
+                        old_widget, new_widget)
+
+            widget._replay_calls[i] = (meth, call_args, new_widget)
+
+    async def _replay_factory_calls_from(self, proxy, real):
+        """Recursively replay a proxy widget's factory sub-tree onto a
+        real widget.  Called when the proxy accumulated add_name /
+        add_action calls before any browser was connected."""
+        for meth, call_args, sub_proxy in proxy._replay_calls:
+            resolved = [self._resolve_arg(a) for a in call_args]
+            result = await self._call(real._wid, meth, *resolved)
+            sub_new = self._resolve_return(result)
+
+            await self._transfer_proxy(sub_proxy, sub_new)
+
+            if (isinstance(sub_proxy, Widget)
+                    and isinstance(sub_new, Widget)
+                    and sub_proxy._replay_calls):
+                sub_new._replay_calls = []
+                await self._replay_factory_calls_from(sub_proxy, sub_new)
+
+            real._replay_calls.append((meth, call_args, sub_new))
 
     async def _reconstruct_widget(self, widget):
         """Replay a single widget's creation, state, and callbacks."""
@@ -687,55 +793,20 @@ class Session:
                     break
 
         # 4. Replay factory calls (e.g. add_action, add_name, add_separator)
-        for i, (meth, call_args, old_widget) in enumerate(
-                widget._replay_calls):
-            resolved = [self._resolve_arg(a) for a in call_args]
-            result = await self._call(widget._wid, meth, *resolved)
-            new_widget = self._resolve_return(result)
+        await self._replay_factory_calls(widget)
 
-            if (isinstance(old_widget, Widget)
-                    and isinstance(new_widget, Widget)):
-                for act, (handler, ea, ek, style) in \
-                        old_widget._registered_callbacks.items():
-                    if style == "on":
-                        await new_widget.on(act, handler, *ea, **ek)
-                    else:
-                        await new_widget.add_callback(act, handler, *ea, **ek)
-                # Replay callback-synced state
-                cls_sync = WIDGET_CALLBACK_SYNC.get(
-                    old_widget._js_class, {})
-                sync_keys = set()
-                for spec in cls_sync.values():
-                    if isinstance(spec, list):
-                        sync_keys.update(k for _, k in spec)
-                    else:
-                        sync_keys.add(spec)
-                for key in sync_keys:
-                    if key in old_widget._state:
-                        value = old_widget._state[key]
-                        setter = f"set_{key}"
-                        if isinstance(value, tuple):
-                            await self._call(new_widget._wid, setter, *value)
-                        else:
-                            await self._call(new_widget._wid, setter, value)
-                        new_widget._state[key] = value
-                # Re-register auto-sync listeners on the new widget
-                for act in cls_sync:
-                    if act not in new_widget._auto_sync_actions:
-                        await self._listen(new_widget._wid, act,
-                                           lambda wid, *a: None)
-                        new_widget._auto_sync_actions.add(act)
-                # Update the replay entry
-                widget._replay_calls[i] = (meth, call_args, new_widget)
-
-        # 5. Re-register callbacks
-        for action, (handler, extra_args, extra_kwargs, style) in \
-                widget._registered_callbacks.items():
-            if style == "on":
-                await widget.on(action, handler, *extra_args, **extra_kwargs)
-            else:
-                await widget.add_callback(action, handler, *extra_args,
-                                          **extra_kwargs)
+        # 5. Re-register callbacks (save and clear first to avoid
+        #    duplicates, since on()/add_callback() append to the list)
+        saved_cbs = dict(widget._registered_callbacks)
+        widget._registered_callbacks = {}
+        for action, entries in saved_cbs.items():
+            for handler, extra_args, extra_kwargs, style in entries:
+                if style == "on":
+                    await widget.on(action, handler, *extra_args,
+                                    **extra_kwargs)
+                else:
+                    await widget.add_callback(action, handler, *extra_args,
+                                              **extra_kwargs)
 
         # 6. Re-register auto-sync listeners
         for action in widget._auto_sync_actions:
@@ -762,9 +833,10 @@ class Session:
         stale = [wid for wid in self._widget_map if wid not in tree_wids]
         for wid in stale:
             self._widget_map.pop(wid, None)
-            stale_keys = [k for k in self._callbacks if k.startswith(f"{wid}:")]
-            for k in stale_keys:
-                del self._callbacks[k]
+
+        # Clear all callback handlers — the new browser has no listeners
+        # yet, so _listen must re-send "listen" messages for every action.
+        self._callbacks.clear()
 
         await self._send({"type": "reconstruct-start",
                           "next_wid": self._next_wid})

@@ -19,6 +19,7 @@ from pgwidgets.method_types import (
     REPLAY_METHODS, CHILD_SELECT_METHODS, TREE_VIEW_WIDGETS,
     STATE_SYNC_CALLBACKS, STATE_SYNC_REQUIRES_OPTION,
     WIDGET_CALLBACK_SYNC, CHILD_CLOSE_CALLBACKS,
+    FACTORY_RETURN_TYPES,
 )
 
 
@@ -264,10 +265,11 @@ class Widget:
     async def on(self, action, handler, *extra_args, **extra_kwargs):
         """Register a callback. The handler receives
         ``(*callback_args, *extra_args, **extra_kwargs)`` -- no widget arg.
-        Handler can be sync or async."""
+        Handler can be sync or async.
+        Multiple handlers can be registered for the same action."""
         # Store for reconstruction
-        self._registered_callbacks[action] = (
-            handler, extra_args, extra_kwargs, "on")
+        self._registered_callbacks.setdefault(action, []).append(
+            (handler, extra_args, extra_kwargs, "on"))
 
         async def wrapper(wid, *args):
             resolved = [self._session._resolve_return(a) for a in args]
@@ -279,10 +281,11 @@ class Widget:
     async def add_callback(self, action, handler, *extra_args, **extra_kwargs):
         """Register a callback. The handler receives
         ``(widget, *callback_args, *extra_args, **extra_kwargs)``.
-        Handler can be sync or async."""
+        Handler can be sync or async.
+        Multiple handlers can be registered for the same action."""
         # Store for reconstruction
-        self._registered_callbacks[action] = (
-            handler, extra_args, extra_kwargs, "add_callback")
+        self._registered_callbacks.setdefault(action, []).append(
+            (handler, extra_args, extra_kwargs, "add_callback"))
 
         async def wrapper(wid, *args):
             resolved = [self._session._resolve_return(a) for a in args]
@@ -410,6 +413,21 @@ def _make_child_method(method_name, param_names, child_type):
             pass  # recorded after _call below
 
         result = await self._call(method_name, *args)
+
+        # No browser connected — create a local proxy widget so the
+        # caller can keep building the tree (e.g. menu.add_name(...)
+        # returns a Menu/MenuAction proxy).
+        if result is None and is_replay:
+            ret_cls = FACTORY_RETURN_TYPES.get(
+                (self._js_class, method_name))
+            if ret_cls:
+                session = self._session
+                proxy_wid = session._next_wid
+                session._next_wid += 1
+                cls = session._widget_classes.get(ret_cls, Widget)
+                result = cls._from_existing(session, proxy_wid, ret_cls)
+                session._widget_map[proxy_wid] = result
+
         if (isinstance(result, Widget) and isinstance(child, Widget)
                 and result is not child):
             result._child_content = child
