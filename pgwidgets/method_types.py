@@ -25,16 +25,20 @@ JS_ONLY = "js_only"
 # Values: "multi" = appends to children list, "single" = replaces child
 CHILD_METHODS = {
     "add_widget": "multi",
+    "insert_widget": "multi",
     "set_widget": "single",
     "add_menu": "multi",
     "add_name": "multi",
     "add_action": "multi",
+    "remove": "remove",
+    "remove_widget": "remove",
+    "remove_all": "remove_all",
 }
 
 # Methods that only make sense in the browser
 JS_ONLY_METHODS = {
     "get_element", "get_draw_context", "get_video_element",
-    "get_content_element",
+    "get_content_element", "get_position",
     # Timer runtime queries
     "is_set", "elapsed_time", "time_left",
     # TextSource runtime queries
@@ -241,6 +245,16 @@ CLEAR_RESETS = {
     "TableView": ["rows", "data", "columns", "_collapsed_paths", "_sort"],
     "HtmlView": ["html"],
     "ExternalWidget": ["content"],
+}
+
+
+# Methods that are JS-only and should raise an error on the Python side
+# with a helpful message.  Maps (widget_class, method_name) -> message.
+UNSUPPORTED_METHODS = {
+    ("Dialog", "get_content_area"):
+        "get_content_area() is not supported on the Python side. "
+        "Use add_widget(), insert_widget(), and set_spacing() directly "
+        "on the Dialog instead.",
 }
 
 

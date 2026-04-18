@@ -107,10 +107,15 @@ Horizontal box layout. Same interface as VBox.
 ButtonBox
 ~~~~~~~~~
 
-Box layout for buttons. Like HBox/VBox with an orientation option.
+Box layout for buttons. All buttons are sized to match the widest button,
+with labels centered.
 
-- **Options:** ``orientation``
-- **Methods:** ``add_widget(child, stretch)``, ``set_spacing(gap)``
+- **Options:** ``orientation``, ``halign``
+- **Methods:** ``add_widget(child, stretch)``, ``insert_widget(index, child, stretch)``,
+  ``set_spacing(gap)``, ``set_halign(halign)``
+
+The ``halign`` option controls horizontal alignment of the buttons within
+the box: ``'left'``, ``'center'`` (default), or ``'right'``.
 
 GridBox
 ~~~~~~~
@@ -226,20 +231,36 @@ A page-level container (fills the browser viewport).
 Dialog
 ~~~~~~
 
-Modal or non-modal dialog with buttons.
+Modal or non-modal dialog with buttons. The dialog contains an internal
+content area (vertical box layout) where you add your widgets, and an
+optional row of buttons at the bottom.
 
 - **Args:** ``title``, ``buttons``
 - **Options:** ``autoclose``, ``resizable``, ``moveable``, ``modal``
-- **Methods:** ``get_content_area()``
-- **Callbacks:** ``activated`` -- fires with the button label clicked.
+- **Methods:** ``add_widget(child, stretch)``, ``insert_widget(index, child, stretch)``,
+  ``set_spacing(gap)``, ``popup(x, y)``, ``set_modal(tf)``
+- **Callbacks:** ``activated`` -- fires with the button value when clicked.
+
+Add content directly to the dialog using ``add_widget()``. The content area
+is a vertical box layout, so children stack top-to-bottom with optional
+stretch factors, just like ``VBox``.
 
 .. code-block:: python
 
-   dlg = Widgets.Dialog("Confirm", ["OK", "Cancel"], modal=True)
-   content = dlg.get_content_area()
-   # content is a widget you can add children to
-   dlg.on("activated", lambda btn_text: print(f"Clicked: {btn_text}"))
-   dlg.show()
+   dlg = W.Dialog("Confirm", [("OK", True), ("Cancel", False)],
+                  modal=True, autoclose=True)
+   dlg.set_spacing(8)
+   dlg.add_widget(W.Label("Are you sure?"), 0)
+   dlg.add_widget(W.TextEntry(text="Reason"), 0)
+   dlg.on("activated", lambda val: print(f"Result: {val}"))
+   dlg.popup()
+
+.. note::
+
+   ``get_content_area()`` is only available on the JavaScript side.
+   On the Python side, use ``add_widget()``, ``insert_widget()``, and
+   ``set_spacing()`` directly on the Dialog. This ensures that child
+   widgets are properly tracked for browser reconnection.
 
 ColorDialog
 ~~~~~~~~~~~
@@ -389,10 +410,16 @@ Slider
 ~~~~~~
 
 - **Options:** ``orientation``, ``track``, ``dtype``, ``min``, ``max``,
-  ``step``, ``value``, ``show_value``
+  ``step``, ``value``, ``show_value``, ``show_value_position``, ``decimals``
 - **Methods:** ``set_value(num)``, ``get_value()``,
-  ``set_limits(minval, maxval, incrval)``, ``set_tracking(track)``
+  ``set_limits(minval, maxval, incrval)``, ``set_tracking(track)``,
+  ``set_decimals(num)``
 - **Callbacks:** ``activated``
+
+The ``show_value`` option (default ``False``) displays the current value.
+``show_value_position`` controls placement: ``'r'`` (right, default),
+``'l'`` (left), ``'t'`` (top), ``'b'`` (bottom).
+``decimals`` sets fixed decimal places for the display (default: auto from step).
 
 .. code-block:: python
 
@@ -404,11 +431,18 @@ Dial
 
 Rotary dial control.
 
-- **Options:** ``track``, ``dtype``, ``min``, ``max``, ``step``, ``value``
+- **Options:** ``track``, ``dtype``, ``min``, ``max``, ``step``, ``value``,
+  ``show_value``, ``show_value_position``, ``decimals``
 - **Methods:** ``set_value(num)``, ``get_value()``,
   ``set_limits(minval, maxval, incrval)``, ``set_tracking(track)``,
-  ``set_knob_diameter(len_px)``, ``set_icon(url, size)``
+  ``set_decimals(num)``, ``set_knob_diameter(len_px)``, ``set_icon(url, size)``
 - **Callbacks:** ``activated``
+
+The ``show_value`` option (default ``False``) displays the current value.
+``show_value_position`` controls placement: ``'b'`` (bottom, default),
+``'ur'`` (upper right), ``'ul'`` (upper left), ``'lr'`` (lower right),
+``'ll'`` (lower left).
+``decimals`` sets fixed decimal places for the display (default: auto from step).
 
 ScrollBar
 ~~~~~~~~~
@@ -576,7 +610,12 @@ ToolBar
 ToolBarAction
 ~~~~~~~~~~~~~
 
-- **Options:** ``text``, ``icon_url``, ``iconsize``, ``toggle``, ``group``
+- **Options:** ``text``, ``icon_url``, ``iconsize``, ``toggle``, ``group``,
+  ``menu``
 - **Methods:** ``set_text(text)``, ``get_text()``, ``set_icon(url, iconsize)``,
-  ``set_state(value)``, ``get_state()``
+  ``set_state(value)``, ``get_state()``, ``set_menu(menu)``
 - **Callbacks:** ``activated``
+
+The ``menu`` option attaches a ``Menu`` widget that pops up when the action
+is clicked. Supports click-and-hold (drag to select) and click-to-toggle
+(click to open, click again or select to close) interaction.

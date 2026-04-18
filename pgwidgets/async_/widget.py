@@ -19,7 +19,7 @@ from pgwidgets.method_types import (
     REPLAY_METHODS, CHILD_SELECT_METHODS, TREE_VIEW_WIDGETS,
     STATE_SYNC_CALLBACKS, STATE_SYNC_REQUIRES_OPTION,
     WIDGET_CALLBACK_SYNC, CHILD_CLOSE_CALLBACKS,
-    FACTORY_RETURN_TYPES,
+    FACTORY_RETURN_TYPES, UNSUPPORTED_METHODS,
 )
 
 
@@ -355,7 +355,13 @@ class Widget:
 
 
 def _resolve_kwargs(method_name, param_names, args, kwargs):
-    """Merge kwargs into positional args based on param_names."""
+    """Merge kwargs into positional args based on param_names.
+
+    When the last declared param is ``"options"``, any remaining kwargs
+    are bundled into a dict for that parameter (e.g.
+    ``add_widget(child, title="Tab 1")`` becomes
+    ``add_widget(child, {"title": "Tab 1"})``).
+    """
     if not kwargs:
         return args
     merged = list(args)
@@ -366,6 +372,23 @@ def _resolve_kwargs(method_name, param_names, args, kwargs):
             merged.append(kwargs.pop(name))
         else:
             break
+    if kwargs and param_names and param_names[-1] == "options":
+        # Bundle remaining kwargs into the options dict
+        opts_idx = len(param_names) - 1
+        if opts_idx < len(merged) and isinstance(merged[opts_idx], dict):
+            merged[opts_idx] = {**merged[opts_idx], **kwargs}
+        elif opts_idx < len(merged) and isinstance(merged[opts_idx], str):
+            # String in options slot (e.g. add_action("text", toggle=True))
+            # — convert to dict like the JS side does
+            merged[opts_idx] = {"text": merged[opts_idx], **kwargs}
+        else:
+            while len(merged) < opts_idx:
+                merged.append(None)
+            if opts_idx < len(merged) and merged[opts_idx] is None:
+                merged[opts_idx] = dict(kwargs)
+            else:
+                merged.append(dict(kwargs))
+        kwargs.clear()
     if kwargs:
         unknown = ", ".join(sorted(kwargs))
         raise TypeError(
@@ -414,13 +437,43 @@ def _make_child_method(method_name, param_names, child_type):
     """Create an async method that tracks parent-child relationships."""
     is_replay = method_name in REPLAY_METHODS
 
+    if child_type == "remove_all":
+        async def method(self, *args, **kwargs):
+            args = _resolve_kwargs(method_name, param_names, args, kwargs)
+            # Detach all children
+            roots = self._session._root_widgets
+            for child, _, _ in self._children:
+                child._parent = None
+                if child not in roots:
+                    roots.append(child)
+            self._children = []
+            return await self._call(method_name, *args)
+        method.__name__ = method_name
+        method.__qualname__ = f"Widget.{method_name}"
+        params = ", ".join(param_names)
+        method.__doc__ = f"{method_name}({params})"
+        return method
+
+    # Find which positional arg is the child widget
+    child_idx = param_names.index("child") if "child" in param_names else 0
+
     async def method(self, *args, **kwargs):
         args = _resolve_kwargs(method_name, param_names, args, kwargs)
-        child = args[0]
-        extra_args = args[1:]
+        child = args[child_idx]
+        extra_args = args[:child_idx] + args[child_idx + 1:]
 
         if isinstance(child, Widget):
-            if child_type == "single":
+            if child_type == "remove":
+                # Remove child from parent tracking
+                self._children = [
+                    (c, ea, mn) for c, ea, mn in self._children
+                    if c is not child]
+                child._parent = None
+                # Child becomes a root again
+                roots = self._session._root_widgets
+                if child not in roots:
+                    roots.append(child)
+            elif child_type == "single":
                 for old_child, _, _ in self._children:
                     old_child._parent = None
                     roots = self._session._root_widgets
@@ -429,11 +482,12 @@ def _make_child_method(method_name, param_names, child_type):
                 self._children = [(child, extra_args, method_name)]
             else:
                 self._children.append((child, extra_args, method_name))
-            child._parent = self
-            try:
-                self._session._root_widgets.remove(child)
-            except ValueError:
-                pass
+            if child_type != "remove":
+                child._parent = self
+                try:
+                    self._session._root_widgets.remove(child)
+                except ValueError:
+                    pass
         elif is_replay:
             pass  # recorded after _call below
 
@@ -695,6 +749,16 @@ def build_widget_class(js_class, defn):
     for method_name, param_names in defn.get("methods", {}).items():
         _add_classified_method(attrs, method_name, param_names,
                                all_methods, js_class)
+
+    # Add error stubs for unsupported methods
+    for (wc, mn), msg in UNSUPPORTED_METHODS.items():
+        if wc == js_class:
+            def _make_unsupported(name, message):
+                def method(self, *args, **kwargs):
+                    raise NotImplementedError(message)
+                method.__name__ = name
+                return method
+            attrs[mn] = _make_unsupported(mn, msg)
 
     # Override action methods that need to track an item list
     item_cfg = ITEM_LIST_CONFIG.get(js_class)
