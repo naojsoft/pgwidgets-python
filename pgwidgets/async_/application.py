@@ -1272,6 +1272,28 @@ class Application:
         if self._run_future is not None and not self._run_future.done():
             self._run_future.cancel()
 
+    async def process_events(self, timeout=0.1):
+        """Yield control to the event loop for up to *timeout* seconds.
+
+        Use this instead of :meth:`run` when you want to control the
+        main loop yourself::
+
+            await app.start()
+            while not done:
+                # ... your own work ...
+                await app.process_events(0.05)
+
+        In the async API, callbacks are dispatched by the asyncio event
+        loop directly, so this simply yields control for the requested
+        duration.
+
+        Parameters
+        ----------
+        timeout : float
+            Seconds to yield to the event loop (default 0.1).
+        """
+        await asyncio.sleep(timeout)
+
     async def run(self):
         """Start servers and run forever. Ctrl-C to exit cleanly."""
         await self.start()

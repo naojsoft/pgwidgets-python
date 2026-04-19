@@ -17,6 +17,7 @@ import mimetypes
 import queue
 import secrets
 import threading
+import time
 import traceback
 import http.server
 from pathlib import Path
@@ -168,7 +169,10 @@ class Session:
         if self._stop_event is not None:
             self._stop_event.set()
         if self._cb_thread is not None:
-            self._cb_thread.join(timeout=2)
+            # Don't join if we're running on the callback thread itself
+            # (e.g. app.close() called from within a callback).
+            if threading.current_thread() is not self._cb_thread:
+                self._cb_thread.join(timeout=2)
 
     # -- Message handling --
 
@@ -426,6 +430,7 @@ class Session:
         msg["id"] = msg_id
         event = threading.Event()
         self._events[msg_id] = event
+        #print(msg)
         payload = json.dumps(msg)
         # Primary: wait for result
         asyncio.run_coroutine_threadsafe(
@@ -738,12 +743,26 @@ class Session:
                              lambda wid, *a: None)
                 new_widget._auto_sync_actions.add(act)
 
+    def _ensure_reconstructed(self, widget):
+        """Ensure a widget has been created on the JS side.
+
+        During reconstruction, replay calls may reference widgets that
+        haven't been reconstructed yet (e.g. a pre-existing Menu passed
+        to add_menu).  This creates the widget on the JS side if needed.
+        """
+        if widget._wid not in self._reconstructed_wids:
+            self._reconstruct_widget(widget)
+
     def _replay_factory_calls(self, widget):
         """Replay factory calls (add_action, add_name, etc.) and
         recursively replay any sub-tree that was built on proxy widgets
         before a browser was connected."""
         for i, (meth, call_args, old_widget) in enumerate(
                 widget._replay_calls):
+            # Ensure any Widget args have been reconstructed first
+            for arg in call_args:
+                if isinstance(arg, Widget):
+                    self._ensure_reconstructed(arg)
             resolved = [self._resolve_arg(a) for a in call_args]
             result = self._call(widget._wid, meth, *resolved)
             new_widget = self._resolve_return(result)
@@ -785,6 +804,9 @@ class Session:
 
     def _reconstruct_widget(self, widget):
         """Replay a single widget's creation, state, and callbacks."""
+        if widget._wid in self._reconstructed_wids:
+            return
+        self._reconstructed_wids.add(widget._wid)
         defn = WIDGETS[widget._js_class]
 
         # 1. Create the widget with its original constructor args
@@ -937,6 +959,7 @@ class Session:
         # yet, so _listen must re-send "listen" messages for every action.
         self._callbacks.clear()
 
+        self._reconstructed_wids = set()
         self._send({"type": "reconstruct-start",
                     "next_wid": self._next_wid})
         for widget in self.walk_widget_tree():
@@ -992,6 +1015,7 @@ class Session:
                         self._call(widget._wid, method_name)
 
         self._send({"type": "reconstruct-end"})
+        self._reconstructed_wids = None
 
     def close(self):
         """Close all browser connections for this session.
@@ -1143,6 +1167,7 @@ class Application:
         Call this after construction and any customisation.  Subclasses
         can override to add extra setup before or after the servers start.
         """
+        self._shutdown = threading.Event()
         self._loop = asyncio.new_event_loop()
         if self._max_sessions is not None:
             self._session_semaphore = asyncio.Semaphore(
@@ -1440,7 +1465,6 @@ class Application:
         """
         if self._loop is None:
             self.start()
-        self._shutdown = threading.Event()
         try:
             if self._concurrency == "serialized":
                 _run_queue_loop(self._cb_queue, self._shutdown)
@@ -1450,6 +1474,53 @@ class Application:
             pass
         finally:
             self._logger.info("Shutting down.")
+
+    def process_events(self, timeout=0.1):
+        """Process pending callbacks for up to *timeout* seconds, then return.
+
+        Use this instead of :meth:`run` when you want to control the
+        main loop yourself::
+
+            app.start()
+            while not done:
+                # ... your own work ...
+                app.process_events(0.05)
+
+        In ``serialized`` mode, callbacks are dispatched on the calling
+        thread (just like :meth:`run`).  In ``per_session`` and
+        ``concurrent`` modes, callbacks already run on their own threads
+        so this method simply yields control briefly.
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum seconds to spend processing events (default 0.1).
+        """
+        if self._concurrency == "serialized":
+            deadline = time.monotonic() + timeout
+            while not self._shutdown.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    handler, args, kwargs, result_slot = \
+                        self._cb_queue.get(timeout=min(remaining, 0.5))
+                except queue.Empty:
+                    continue
+                try:
+                    rv = handler(*args, **kwargs)
+                    if result_slot is not None:
+                        result_slot['value'] = rv
+                except Exception as e:
+                    if result_slot is not None:
+                        result_slot['error'] = e
+                    else:
+                        traceback.print_exc()
+                finally:
+                    if result_slot is not None:
+                        result_slot['event'].set()
+        else:
+            time.sleep(min(timeout, 0.05))
 
     def _run_idle_loop(self):
         """Sleep until shutdown is signalled."""

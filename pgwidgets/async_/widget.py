@@ -19,7 +19,7 @@ from pgwidgets.method_types import (
     REPLAY_METHODS, CHILD_SELECT_METHODS, TREE_VIEW_WIDGETS,
     STATE_SYNC_CALLBACKS, STATE_SYNC_REQUIRES_OPTION,
     WIDGET_CALLBACK_SYNC, CHILD_CLOSE_CALLBACKS,
-    FACTORY_RETURN_TYPES, UNSUPPORTED_METHODS,
+    FACTORY_RETURN_TYPES, UNSUPPORTED_METHODS, CUSTOM_METHODS,
 )
 
 
@@ -759,6 +759,11 @@ def build_widget_class(js_class, defn):
                 method.__name__ = name
                 return method
             attrs[mn] = _make_unsupported(mn, msg)
+
+    # Inject custom Python-side method implementations
+    for (wc, mn), func in CUSTOM_METHODS.items():
+        if wc == js_class:
+            attrs[mn] = func
 
     # Override action methods that need to track an item list
     item_cfg = ITEM_LIST_CONFIG.get(js_class)

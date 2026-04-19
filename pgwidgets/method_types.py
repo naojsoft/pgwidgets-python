@@ -189,7 +189,7 @@ CHILD_CLOSE_CALLBACKS = {
 # Calls are recorded in widget._replay_calls as
 # (method_name, args, returned_widget_or_None).
 REPLAY_METHODS = {
-    "add_name", "add_action", "add_separator", "add_spacer",
+    "add_name", "add_action", "add_menu", "add_separator", "add_spacer",
 }
 
 # Factory methods that create and return a new widget on the JS side.
@@ -255,6 +255,38 @@ UNSUPPORTED_METHODS = {
         "get_content_area() is not supported on the Python side. "
         "Use add_widget(), insert_widget(), and set_spacing() directly "
         "on the Dialog instead.",
+}
+
+
+# Methods with custom Python-side implementations that bypass the
+# auto-generated browser round-trip.  Maps (widget_class, method_name)
+# to a function(self, ...) that is used directly as the method body.
+def _index_to_widget(self, index):
+    if index < 0 or index >= len(self._children):
+        return None
+    return self._children[index]
+
+def _index_of(self, child):
+    try:
+        return self._children.index(child)
+    except ValueError:
+        return -1
+
+def _get_menu(self, name):
+    for method_name, args, result in self._replay_calls:
+        if method_name == "add_menu" and args and args[0] == name:
+            return result
+    return None
+
+CUSTOM_METHODS = {
+    ("TabWidget", "index_to_widget"): _index_to_widget,
+    ("TabWidget", "index_of"): _index_of,
+    ("StackWidget", "index_to_widget"): _index_to_widget,
+    ("StackWidget", "index_of"): _index_of,
+    ("MDIWidget", "index_to_widget"): _index_to_widget,
+    ("MDIWidget", "index_of"): _index_of,
+    ("Menu", "get_menu"): _get_menu,
+    ("MenuBar", "get_menu"): _get_menu,
 }
 
 
