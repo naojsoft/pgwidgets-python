@@ -1124,6 +1124,7 @@ class Application:
         self._cb_queue = queue.Queue()  # for "serialized" mode
 
         self._loop = None
+        self._shutdown = threading.Event()
         self._thread = None
         self._session_semaphore = None  # initialized in start()
 

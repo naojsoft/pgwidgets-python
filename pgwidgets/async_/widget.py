@@ -246,6 +246,11 @@ class Widget:
         """The Application this widget belongs to."""
         return self._session.app
 
+    def is_container(self):
+        """Return True if this widget is a container (can hold children)."""
+        defn = WIDGETS.get(self._js_class, {})
+        return defn.get("base") == "container"
+
     # Methods whose string arguments may be local file paths that need
     # to be converted to data URIs before sending to the browser.
     _FILE_ARG_METHODS = frozenset([
