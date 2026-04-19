@@ -218,6 +218,16 @@ CHILD_SELECT_METHODS = {
 POST_CHILDREN_STATE_KEYS = {"sizes", "index", "_collapsed_paths",
                             "_expanded_paths", "_sort", "scroll_position"}
 
+# Default state values applied when a widget is created without
+# explicitly setting the key (e.g. TextEntry() with no text arg).
+STATE_DEFAULTS = {
+    "TextEntry": {"text": ""},
+    "TextEntrySet": {"text": ""},
+    "TextArea": {"text": ""},
+    "TextSource": {"text": ""},
+    "ComboBox": {"text": ""},
+}
+
 # Widgets with incrementally-built item lists.
 # These action methods are wrapped to maintain _state["_items"].
 # During reconstruction the items are replayed via the "append" method.
@@ -274,6 +284,12 @@ def _index_of(self, child):
             return i
     return -1
 
+def _dialog_popup(self, x=None, y=None):
+    self._state["visible"] = True
+    if x is not None and y is not None:
+        self._state["position"] = (x, y)
+    return self._call("popup", x, y)
+
 def _get_menu(self, name):
     for method_name, args, result in self._replay_calls:
         if method_name == "add_menu" and args and args[0] == name:
@@ -289,6 +305,7 @@ CUSTOM_METHODS = {
     ("MDIWidget", "index_of"): _index_of,
     ("Menu", "get_menu"): _get_menu,
     ("MenuBar", "get_menu"): _get_menu,
+    ("Dialog", "popup"): _dialog_popup,
 }
 
 

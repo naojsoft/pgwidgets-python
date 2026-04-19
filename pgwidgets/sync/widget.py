@@ -20,6 +20,7 @@ from pgwidgets.method_types import (
     STATE_SYNC_CALLBACKS, STATE_SYNC_REQUIRES_OPTION,
     WIDGET_CALLBACK_SYNC, CHILD_CLOSE_CALLBACKS,
     FACTORY_RETURN_TYPES, UNSUPPORTED_METHODS, CUSTOM_METHODS,
+    STATE_DEFAULTS,
 )
 
 
@@ -109,12 +110,18 @@ class Widget:
         self._constructor_args = tuple(args[:len(pos_names)])
         self._constructor_options = dict(options)
 
-        # Store constructor args as initial state
+        # Store constructor args as initial state (None means "not
+        # provided" since generated __init__ defaults all args to None)
         for i, name in enumerate(pos_names):
-            if i < len(args):
+            if i < len(args) and args[i] is not None:
                 self._state[name] = args[i]
         for k, v in options.items():
-            self._state[k] = v
+            if v is not None:
+                self._state[k] = v
+
+        # Apply default state for keys not set by constructor
+        for k, v in STATE_DEFAULTS.get(js_class, {}).items():
+            self._state.setdefault(k, v)
 
         # Apply remaining kwargs as setter calls
         for k, v in kwargs.items():
@@ -391,10 +398,10 @@ def _make_fixed_setter(method_name, state_key, fixed_value):
     return method
 
 
-def _make_getter(method_name, state_key):
+def _make_getter(method_name, state_key, default=None):
     """Create a method that returns from local state."""
     def method(self):
-        return self._state.get(state_key)
+        return self._state.get(state_key, default)
     method.__name__ = method_name
     method.__qualname__ = f"Widget.{method_name}"
     method.__doc__ = f"{method_name}() -> value from local state"
@@ -793,7 +800,8 @@ def _add_classified_method(attrs, method_name, param_names,
                 method_name, param_names, info)
 
     elif category == GETTER:
-        attrs[method_name] = _make_getter(method_name, info)
+        default = STATE_DEFAULTS.get(widget_name, {}).get(info)
+        attrs[method_name] = _make_getter(method_name, info, default)
 
     elif category == CHILD:
         child_type = info  # "multi" or "single"

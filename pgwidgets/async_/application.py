@@ -299,6 +299,15 @@ class Session:
                     else:
                         widget._state[spec] = args[0]
 
+        # Dialog autoclose: the JS side auto-hides when a button is
+        # clicked.  Sync that to Python so reconstruction doesn't
+        # re-show a dialog that was autoclosed.
+        if (widget is not None
+                and widget._js_class == "Dialog"
+                and action == "activated"
+                and widget._state.get("autoclose")):
+            widget._state["visible"] = False
+
         # Tree/table expand/collapse/sort sync from browser interaction
         if widget is not None and action in ("expanded", "collapsed", "sorted"):
             if action == "expanded" and len(args) >= 2:
@@ -672,6 +681,19 @@ class Session:
                 await self._listen(new_widget._wid, act,
                                    lambda wid, *a: None)
                 new_widget._auto_sync_actions.add(act)
+        # Replay any state the proxy accumulated (e.g. set_tooltip)
+        for key, value in old_widget._state.items():
+            if key.startswith("_"):
+                continue
+            if key in sync_keys:
+                continue
+            method_name = (self._STATE_KEY_TO_SETTER.get(key)
+                           or f"set_{key}")
+            if isinstance(value, tuple):
+                await self._call(new_widget._wid, method_name, *value)
+            else:
+                await self._call(new_widget._wid, method_name, value)
+            new_widget._state[key] = value
 
     async def _replay_factory_calls(self, widget):
         """Replay factory calls (add_action, add_name, etc.) and
