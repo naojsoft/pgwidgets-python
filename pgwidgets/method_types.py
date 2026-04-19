@@ -54,6 +54,8 @@ JS_ONLY_METHODS = {
     "get_content_area",
     # ComboBox
     "get_alpha",
+    # Container
+    "num_children",
     # TabWidget lookups
     "get_tab_id", "get_child", "index_of",
     # MDIWidget
@@ -264,13 +266,13 @@ UNSUPPORTED_METHODS = {
 def _index_to_widget(self, index):
     if index < 0 or index >= len(self._children):
         return None
-    return self._children[index]
+    return self._children[index][0]
 
 def _index_of(self, child):
-    try:
-        return self._children.index(child)
-    except ValueError:
-        return -1
+    for i, (ch, _, _) in enumerate(self._children):
+        if ch is child:
+            return i
+    return -1
 
 def _get_menu(self, name):
     for method_name, args, result in self._replay_calls:

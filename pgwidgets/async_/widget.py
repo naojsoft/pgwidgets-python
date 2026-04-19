@@ -251,6 +251,10 @@ class Widget:
         defn = WIDGETS.get(self._js_class, {})
         return defn.get("base") == "container"
 
+    def num_children(self):
+        """Return the number of children in this container."""
+        return len(self._children)
+
     # Methods whose string arguments may be local file paths that need
     # to be converted to data URIs before sending to the browser.
     _FILE_ARG_METHODS = frozenset([
