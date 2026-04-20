@@ -310,7 +310,7 @@ async def main():
                 await content.add_widget(
                     await W.Label("Horizontal:"), 0)
                 hsb = await W.ScrollBar(orientation="horizontal")
-                await hsb.set_thumb_width(0.2)
+                await hsb.set_thumb_percent(0.2)
                 async def on_hsb(pct):
                     await lbl.set_text(f"{int(pct * 100)}%")
                 await hsb.on("activated", on_hsb)
@@ -318,7 +318,7 @@ async def main():
                 hbox = await W.HBox(spacing=8)
                 await hbox.add_widget(await W.Label("Vertical:"), 0)
                 vsb = await W.ScrollBar(orientation="vertical")
-                await vsb.set_thumb_width(0.3)
+                await vsb.set_thumb_percent(0.3)
                 await vsb.on("activated", on_hsb)
                 await hbox.add_widget(vsb, 0)
                 await hbox.add_widget(lbl, 1)

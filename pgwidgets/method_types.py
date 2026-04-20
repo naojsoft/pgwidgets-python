@@ -138,7 +138,6 @@ SPECIAL_GETTERS = {
 STATE_SYNC_CALLBACKS = {
     "move": "position",
     "resize": "size",
-    "scrolled": "scroll_position",
 }
 
 # Auto-sync callbacks that should only be listened for on widgets
@@ -169,6 +168,8 @@ WIDGET_CALLBACK_SYNC = {
     "TextArea": {"activated": "text", "modified": "text"},
     "ComboBox": {"activated": [(0, "index"), (1, "text")],
                  "modified": "text"},
+    "AbstractScrollArea": {"scrolled": ("scroll_percent",)},
+    "ScrollArea": {"scrolled": ("scroll_percent",)},
     "Splitter": {"sizing": "sizes"},
     "Expander": {"toggled": "collapsed"},
     "ToolBarAction": {"activated": "state"},
@@ -216,7 +217,8 @@ CHILD_SELECT_METHODS = {
 # State keys that must be replayed AFTER children are attached
 # (e.g. Splitter.set_sizes needs panes to already exist).
 POST_CHILDREN_STATE_KEYS = {"sizes", "index", "_collapsed_paths",
-                            "_expanded_paths", "_sort", "scroll_position"}
+                            "_expanded_paths", "_sort", "scroll_position",
+                            "scroll_percent"}
 
 # Default state values applied when a widget is created without
 # explicitly setting the key (e.g. TextEntry() with no text arg).

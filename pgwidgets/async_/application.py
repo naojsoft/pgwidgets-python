@@ -296,6 +296,9 @@ class Session:
                         for idx, skey in spec:
                             if idx < len(args):
                                 widget._state[skey] = args[idx]
+                    elif isinstance(spec, tuple):
+                        # Tuple spec: (state_key,) — store all args
+                        widget._state[spec[0]] = tuple(args)
                     else:
                         widget._state[spec] = args[0]
 
@@ -347,6 +350,10 @@ class Session:
                                 setter = (self._STATE_KEY_TO_SETTER.get(skey)
                                           or f"set_{skey}")
                                 self._push(wid, setter, args[idx])
+                    elif isinstance(spec, tuple):
+                        setter = (self._STATE_KEY_TO_SETTER.get(spec[0])
+                                  or f"set_{spec[0]}")
+                        self._push(wid, setter, *args)
                     else:
                         setter = (self._STATE_KEY_TO_SETTER.get(spec)
                                   or f"set_{spec}")

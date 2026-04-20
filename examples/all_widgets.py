@@ -284,14 +284,14 @@ def on_session(session):
             lbl = W.Label("0%")
             content.add_widget(W.Label("Horizontal:"), 0)
             hsb = W.ScrollBar(orientation="horizontal")
-            hsb.set_thumb_width(0.2)
+            hsb.set_thumb_percent(0.2)
             hsb.on("activated",
                    lambda pct: lbl.set_text(f"{int(pct * 100)}%"))
             content.add_widget(hsb, 0)
             hbox = W.HBox(spacing=8)
             hbox.add_widget(W.Label("Vertical:"), 0)
             vsb = W.ScrollBar(orientation="vertical")
-            vsb.set_thumb_width(0.3)
+            vsb.set_thumb_percent(0.3)
             vsb.on("activated",
                    lambda pct: lbl.set_text(f"{int(pct * 100)}%"))
             hbox.add_widget(vsb, 0)
