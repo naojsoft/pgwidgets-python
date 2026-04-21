@@ -73,6 +73,7 @@ class Session:
 
     def __init__(self, app, session_id, ws=None, token=None):
         self._app = app
+        self._logger = app._logger
         self._id = session_id
         self._token = token if token is not None else secrets.token_urlsafe(32)
 
@@ -1083,18 +1084,22 @@ class Application:
         is_reconnect = False
         if reconnect_sid is not None and reconnect_token is not None:
             existing = self._sessions.get(reconnect_sid)
-            if existing is not None and existing.token == reconnect_token:
-                session = existing
-                is_reconnect = True
-                self._logger.info(
-                    f"Session {reconnect_sid}: browser reconnecting.")
-            else:
-                # Credentials were provided but invalid — reject.
-                self._logger.warning(
-                    f"Rejected connection: invalid session credentials "
-                    f"(session_id={reconnect_sid}).")
-                await ws.close(4001, "Invalid session credentials")
-                return
+            if existing is not None:
+                if existing.token == reconnect_token:
+                    session = existing
+                    is_reconnect = True
+                    self._logger.info(
+                        f"Session {reconnect_sid}: browser reconnecting.")
+                else:
+                    # Session exists but wrong token — reject.
+                    self._logger.warning(
+                        f"Rejected connection: invalid session credentials "
+                        f"(session_id={reconnect_sid}).")
+                    await ws.close(4001, "Invalid session credentials")
+                    return
+            # else: session not found (e.g. server restarted) — fall
+            # through to create a new session, preserving the
+            # browser's token so it can reconnect without a refresh.
 
         if session is None:
             # New session — acquire a slot if max_sessions is set.
@@ -1104,7 +1109,8 @@ class Application:
             session_id = self._next_session_id
             self._next_session_id += 1
 
-            session = Session(self, session_id, ws=ws)
+            session = Session(self, session_id, ws=ws,
+                              token=reconnect_token)
 
             # Set up per-session lock if needed.
             if self._concurrency == "per_session":

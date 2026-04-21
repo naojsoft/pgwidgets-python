@@ -89,6 +89,7 @@ class Session:
 
     def __init__(self, app, session_id, ws=None, token=None):
         self._app = app
+        self._logger = app._logger
         self._id = session_id
         self._token = token if token is not None else secrets.token_urlsafe(32)
 
@@ -798,6 +799,15 @@ class Session:
 
             self._transfer_proxy(old_widget, new_widget)
 
+            # Repoint the old widget to the new JS-side wid so user
+            # references that held onto old_widget keep working.
+            if (isinstance(old_widget, Widget)
+                    and isinstance(new_widget, Widget)
+                    and old_widget is not new_widget):
+                new_wid = new_widget._wid
+                old_widget._wid = new_wid
+                self._widget_map[new_wid] = old_widget
+
             # Recursively replay any sub-tree the proxy accumulated
             # (e.g. items added to a Menu returned by MenuBar.add_name)
             if (isinstance(old_widget, Widget)
@@ -807,9 +817,9 @@ class Session:
                     self._replay_factory_calls_from(
                         old_widget, new_widget)
 
-            # Update the replay entry so future reconstructions
-            # reference the new widget
-            widget._replay_calls[i] = (meth, call_args, new_widget)
+            # Keep old_widget in the replay entry since it's now
+            # repointed and is what the user holds a reference to
+            widget._replay_calls[i] = (meth, call_args, old_widget)
 
     def _replay_factory_calls_from(self, proxy, real):
         """Recursively replay a proxy widget's factory sub-tree onto a
@@ -822,6 +832,13 @@ class Session:
 
             self._transfer_proxy(sub_proxy, sub_new)
 
+            # Repoint old proxy to new wid
+            if (isinstance(sub_proxy, Widget)
+                    and isinstance(sub_new, Widget)
+                    and sub_proxy is not sub_new):
+                sub_proxy._wid = sub_new._wid
+                self._widget_map[sub_new._wid] = sub_proxy
+
             # Recurse into sub-proxy's own sub-tree
             if (isinstance(sub_proxy, Widget)
                     and isinstance(sub_new, Widget)
@@ -829,7 +846,7 @@ class Session:
                 sub_new._replay_calls = []
                 self._replay_factory_calls_from(sub_proxy, sub_new)
 
-            real._replay_calls.append((meth, call_args, sub_new))
+            real._replay_calls.append((meth, call_args, sub_proxy))
 
     def _reconstruct_widget(self, widget):
         """Replay a single widget's creation, state, and callbacks."""
@@ -1235,18 +1252,22 @@ class Application:
         if reconnect_sid is not None and reconnect_token is not None:
             with self._session_lock:
                 existing = self._sessions.get(reconnect_sid)
-            if existing is not None and existing.token == reconnect_token:
-                session = existing
-                is_reconnect = True
-                self._logger.info(
-                    f"Session {reconnect_sid}: browser reconnecting.")
-            else:
-                # Credentials were provided but invalid — reject.
-                self._logger.warning(
-                    f"Rejected connection: invalid session credentials "
-                    f"(session_id={reconnect_sid}).")
-                await ws.close(4001, "Invalid session credentials")
-                return
+            if existing is not None:
+                if existing.token == reconnect_token:
+                    session = existing
+                    is_reconnect = True
+                    self._logger.info(
+                        f"Session {reconnect_sid}: browser reconnecting.")
+                else:
+                    # Session exists but wrong token — reject.
+                    self._logger.warning(
+                        f"Rejected connection: invalid session credentials "
+                        f"(session_id={reconnect_sid}).")
+                    await ws.close(4001, "Invalid session credentials")
+                    return
+            # else: session not found (e.g. server restarted) — fall
+            # through to create a new session, preserving the
+            # browser's token so it can reconnect without a refresh.
 
         if session is None:
             # New session — acquire a slot if max_sessions is set.
@@ -1257,7 +1278,8 @@ class Application:
                 session_id = self._next_session_id
                 self._next_session_id += 1
 
-            session = Session(self, session_id, ws=ws)
+            session = Session(self, session_id, ws=ws,
+                              token=reconnect_token)
 
             if self._concurrency == "per_session":
                 session._start_session_thread()

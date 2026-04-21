@@ -25,6 +25,7 @@ JS_ONLY = "js_only"
 # Values: "multi" = appends to children list, "single" = replaces child
 CHILD_METHODS = {
     "add_widget": "multi",
+    "add_button": "multi",
     "insert_widget": "multi",
     "set_widget": "single",
     "add_menu": "multi",
