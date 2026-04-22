@@ -76,6 +76,7 @@ class Widget:
         self._registered_callbacks = {}
         self._auto_sync_actions = set()
         self._replay_calls = []
+        self._add_seq = 0  # insertion order across _children + _replay_calls
 
         # Parse args/kwargs against definition
         pos_names = defn.get("args", [])
@@ -159,6 +160,7 @@ class Widget:
         obj._registered_callbacks = {}
         obj._auto_sync_actions = set()
         obj._replay_calls = []
+        obj._add_seq = 0
         return obj
 
     def _register_auto_sync(self):
@@ -417,10 +419,10 @@ def _make_child_method(method_name, param_names, child_type):
             args = _resolve_kwargs(method_name, param_names, args, kwargs)
             # Detach all children
             roots = self._session._root_widgets
-            for child, _, _ in self._children:
-                child._parent = None
-                if child not in roots:
-                    roots.append(child)
+            for entry in self._children:
+                entry[0]._parent = None
+                if entry[0] not in roots:
+                    roots.append(entry[0])
             self._children = []
             return self._call(method_name, *args)
         method.__name__ = method_name
@@ -441,8 +443,8 @@ def _make_child_method(method_name, param_names, child_type):
             if child_type == "remove":
                 # Remove child from parent tracking
                 self._children = [
-                    (c, ea, mn) for c, ea, mn in self._children
-                    if c is not child]
+                    entry for entry in self._children
+                    if entry[0] is not child]
                 child._parent = None
                 # Child becomes a root again
                 roots = self._session._root_widgets
@@ -450,15 +452,18 @@ def _make_child_method(method_name, param_names, child_type):
                     roots.append(child)
             elif child_type == "single":
                 # Remove old child's parent ref
-                for old_child, _, _ in self._children:
+                for entry in self._children:
+                    old_child = entry[0]
                     old_child._parent = None
                     # Old child becomes a root again
                     roots = self._session._root_widgets
                     if old_child not in roots:
                         roots.append(old_child)
-                self._children = [(child, extra_args, method_name)]
+                self._children = [(child, extra_args, method_name, self._add_seq)]
+                self._add_seq += 1
             else:
-                self._children.append((child, extra_args, method_name))
+                self._children.append((child, extra_args, method_name, self._add_seq))
+                self._add_seq += 1
             if child_type != "remove":
                 child._parent = self
                 # Child is no longer a root
@@ -497,7 +502,8 @@ def _make_child_method(method_name, param_names, child_type):
 
         # Record factory call for replay during reconstruction
         if is_replay and not isinstance(child, Widget):
-            self._replay_calls.append((method_name, args, result))
+            self._replay_calls.append((method_name, args, result, self._add_seq))
+            self._add_seq += 1
 
         return result
     method.__name__ = method_name
@@ -516,13 +522,14 @@ def _make_action(method_name, param_names):
         args = _resolve_kwargs(method_name, param_names, args, kwargs)
         # Track child selection by index (e.g. show_widget -> index)
         if select_key and args and isinstance(args[0], Widget):
-            for i, (ch, _, _) in enumerate(self._children):
-                if ch is args[0]:
+            for i, entry in enumerate(self._children):
+                if entry[0] is args[0]:
                     self._state[select_key] = i
                     break
         result = self._call(method_name, *args)
         if is_replay:
-            self._replay_calls.append((method_name, args, result))
+            self._replay_calls.append((method_name, args, result, self._add_seq))
+            self._add_seq += 1
         return result
     method.__name__ = method_name
     method.__qualname__ = f"Widget.{method_name}"

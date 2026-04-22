@@ -317,7 +317,8 @@ class Session:
                 # so reconstruction replays with the current pos/size.
                 content = getattr(widget, '_child_content', None)
                 if content is not None and content._parent is not None:
-                    for ch, ex_args, _ in content._parent._children:
+                    for entry in content._parent._children:
+                        ch, ex_args = entry[0], entry[1]
                         if ch is content and ex_args:
                             opts = ex_args[0]
                             if isinstance(opts, dict):
@@ -697,7 +698,8 @@ class Session:
         """
         def _walk(widget):
             yield widget
-            for child, _args, _meth in widget._children:
+            for entry in widget._children:
+                child = entry[0]
                 yield from _walk(child)
 
         for root in self._root_widgets:
@@ -783,49 +785,81 @@ class Session:
         if widget._wid not in self._reconstructed_wids:
             self._reconstruct_widget(widget)
 
-    def _replay_factory_calls(self, widget):
-        """Replay factory calls (add_action, add_name, etc.) and
-        recursively replay any sub-tree that was built on proxy widgets
-        before a browser was connected."""
-        for i, (meth, call_args, old_widget) in enumerate(
-                widget._replay_calls):
-            # Ensure any Widget args have been reconstructed first
-            for arg in call_args:
-                if isinstance(arg, Widget):
-                    self._ensure_reconstructed(arg)
-            resolved = [self._resolve_arg(a) for a in call_args]
-            result = self._call(widget._wid, meth, *resolved)
-            new_widget = self._resolve_return(result)
+    def _replay_interleaved(self, widget):
+        """Replay children attachments and factory calls (add_action,
+        add_name, add_separator, etc.) in the original interleaved
+        insertion order.
 
-            self._transfer_proxy(old_widget, new_widget)
+        Both _children and _replay_calls entries carry a sequence
+        number at index [3].  We merge the two lists by that number
+        so the JS-side DOM order matches the Python-side call order.
+        """
+        # Build a merged list of (seq, kind, entry_index)
+        ops = []
+        for i, entry in enumerate(widget._children):
+            ops.append((entry[3], "child", i))
+        for i, entry in enumerate(widget._replay_calls):
+            ops.append((entry[3], "replay", i))
+        ops.sort(key=lambda x: x[0])
 
-            # Repoint the old widget to the new JS-side wid so user
-            # references that held onto old_widget keep working.
-            if (isinstance(old_widget, Widget)
-                    and isinstance(new_widget, Widget)
-                    and old_widget is not new_widget):
-                new_wid = new_widget._wid
-                old_widget._wid = new_wid
-                self._widget_map[new_wid] = old_widget
+        for _seq, kind, idx in ops:
+            if kind == "child":
+                entry = widget._children[idx]
+                child, extra_args, child_method = entry[0], entry[1], entry[2]
+                # Ensure the child is fully reconstructed first
+                self._ensure_reconstructed(child)
+                resolved_widget = self._resolve_arg(child)
+                resolved_args = [self._resolve_arg(a) for a in extra_args]
+                result = self._call(widget._wid, child_method,
+                                    resolved_widget, *resolved_args)
+                result = self._resolve_return(result)
+                if (isinstance(result, Widget) and result is not child):
+                    result._child_content = child
+            else:
+                self._replay_one_factory_call(widget, idx)
 
-            # Recursively replay any sub-tree the proxy accumulated
-            # (e.g. items added to a Menu returned by MenuBar.add_name)
-            if (isinstance(old_widget, Widget)
-                    and isinstance(new_widget, Widget)):
-                if old_widget._replay_calls:
-                    new_widget._replay_calls = []
-                    self._replay_factory_calls_from(
-                        old_widget, new_widget)
+    def _replay_one_factory_call(self, widget, i):
+        """Replay a single factory call at index i in widget._replay_calls."""
+        meth, call_args, old_widget, _seq = widget._replay_calls[i]
+        # Ensure any Widget args have been reconstructed first
+        for arg in call_args:
+            if isinstance(arg, Widget):
+                self._ensure_reconstructed(arg)
+        resolved = [self._resolve_arg(a) for a in call_args]
+        result = self._call(widget._wid, meth, *resolved)
+        new_widget = self._resolve_return(result)
 
-            # Keep old_widget in the replay entry since it's now
-            # repointed and is what the user holds a reference to
-            widget._replay_calls[i] = (meth, call_args, old_widget)
+        self._transfer_proxy(old_widget, new_widget)
+
+        # Repoint the old widget to the new JS-side wid so user
+        # references that held onto old_widget keep working.
+        if (isinstance(old_widget, Widget)
+                and isinstance(new_widget, Widget)
+                and old_widget is not new_widget):
+            new_wid = new_widget._wid
+            old_widget._wid = new_wid
+            self._widget_map[new_wid] = old_widget
+
+        # Recursively replay any sub-tree the proxy accumulated
+        # (e.g. items added to a Menu returned by MenuBar.add_name)
+        if (isinstance(old_widget, Widget)
+                and isinstance(new_widget, Widget)):
+            if old_widget._replay_calls:
+                new_widget._replay_calls = []
+                self._replay_factory_calls_from(
+                    old_widget, new_widget)
+
+        # Keep old_widget in the replay entry since it's now
+        # repointed and is what the user holds a reference to
+        widget._replay_calls[i] = (meth, call_args, old_widget, _seq)
 
     def _replay_factory_calls_from(self, proxy, real):
         """Recursively replay a proxy widget's factory sub-tree onto a
         real widget.  Called when the proxy accumulated add_name /
         add_action calls before any browser was connected."""
-        for meth, call_args, sub_proxy in proxy._replay_calls:
+        for entry in proxy._replay_calls:
+            meth, call_args, sub_proxy = entry[0], entry[1], entry[2]
+            seq = entry[3] if len(entry) > 3 else 0
             resolved = [self._resolve_arg(a) for a in call_args]
             result = self._call(real._wid, meth, *resolved)
             sub_new = self._resolve_return(result)
@@ -846,7 +880,7 @@ class Session:
                 sub_new._replay_calls = []
                 self._replay_factory_calls_from(sub_proxy, sub_new)
 
-            real._replay_calls.append((meth, call_args, sub_proxy))
+            real._replay_calls.append((meth, call_args, sub_proxy, seq))
 
     def _reconstruct_widget(self, widget):
         """Replay a single widget's creation, state, and callbacks."""
@@ -928,27 +962,10 @@ class Session:
             else:
                 self._call(widget._wid, method_name, value)
 
-        # 3. Attach to parent (using the same child method that was
-        #    originally used, e.g. add_widget, add_menu, set_widget)
-        if widget._parent is not None:
-            for child, extra_args, child_method in widget._parent._children:
-                if child is widget:
-                    resolved_widget = self._resolve_arg(widget)
-                    resolved_args = [self._resolve_arg(a) for a in extra_args]
-                    result = self._call(widget._parent._wid, child_method,
-                                        resolved_widget, *resolved_args)
-                    # If the child method returned a wrapper widget
-                    # (e.g. MDISubWindow), link it to the content so
-                    # move/resize callbacks propagate to the options.
-                    result = self._resolve_return(result)
-                    if (isinstance(result, Widget) and result is not widget):
-                        result._child_content = widget
-                    break
-
-        # 4. Replay factory calls (e.g. add_action, add_name,
-        #    add_separator).  These create content from non-Widget
-        #    args and return auto-wrapped JS widgets.
-        self._replay_factory_calls(widget)
+        # 3. Attach children and replay factory calls (add_action,
+        #    add_separator, etc.) in the original interleaved order.
+        #    Children are reconstructed on demand via _ensure_reconstructed.
+        self._replay_interleaved(widget)
 
         # 5. Re-register callbacks (save and clear first to avoid
         #    duplicates, since on()/add_callback() append to the list)

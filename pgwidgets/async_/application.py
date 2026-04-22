@@ -273,7 +273,8 @@ class Session:
                 # so reconstruction replays with the current pos/size.
                 content = getattr(widget, '_child_content', None)
                 if content is not None and content._parent is not None:
-                    for ch, ex_args, _ in content._parent._children:
+                    for entry in content._parent._children:
+                        ch, ex_args = entry[0], entry[1]
                         if ch is content and ex_args:
                             opts = ex_args[0]
                             if isinstance(opts, dict):
@@ -645,7 +646,8 @@ class Session:
         """
         def _walk(widget):
             yield widget
-            for child, _args, _meth in widget._children:
+            for entry in widget._children:
+                child = entry[0]
                 yield from _walk(child)
 
         for root in self._root_widgets:
@@ -703,33 +705,74 @@ class Session:
                 await self._call(new_widget._wid, method_name, value)
             new_widget._state[key] = value
 
-    async def _replay_factory_calls(self, widget):
-        """Replay factory calls (add_action, add_name, etc.) and
-        recursively replay any sub-tree that was built on proxy widgets
-        before a browser was connected."""
-        for i, (meth, call_args, old_widget) in enumerate(
-                widget._replay_calls):
-            resolved = [self._resolve_arg(a) for a in call_args]
-            result = await self._call(widget._wid, meth, *resolved)
-            new_widget = self._resolve_return(result)
+    async def _ensure_reconstructed(self, widget):
+        """Ensure a widget has been created on the JS side."""
+        if widget._wid not in self._reconstructed_wids:
+            await self._reconstruct_widget(widget)
 
-            await self._transfer_proxy(old_widget, new_widget)
+    async def _replay_interleaved(self, widget):
+        """Replay children attachments and factory calls in the original
+        interleaved insertion order."""
+        ops = []
+        for i, entry in enumerate(widget._children):
+            ops.append((entry[3], "child", i))
+        for i, entry in enumerate(widget._replay_calls):
+            ops.append((entry[3], "replay", i))
+        ops.sort(key=lambda x: x[0])
 
-            # Recursively replay any sub-tree the proxy accumulated
-            if (isinstance(old_widget, Widget)
-                    and isinstance(new_widget, Widget)):
-                if old_widget._replay_calls:
-                    new_widget._replay_calls = []
-                    await self._replay_factory_calls_from(
-                        old_widget, new_widget)
+        for _seq, kind, idx in ops:
+            if kind == "child":
+                entry = widget._children[idx]
+                child, extra_args, child_method = entry[0], entry[1], entry[2]
+                await self._ensure_reconstructed(child)
+                resolved_widget = self._resolve_arg(child)
+                resolved_args = [self._resolve_arg(a) for a in extra_args]
+                result = await self._call(widget._wid, child_method,
+                                          resolved_widget, *resolved_args)
+                result = self._resolve_return(result)
+                if (isinstance(result, Widget) and result is not child):
+                    result._child_content = child
+            else:
+                await self._replay_one_factory_call(widget, idx)
 
-            widget._replay_calls[i] = (meth, call_args, new_widget)
+    async def _replay_one_factory_call(self, widget, i):
+        """Replay a single factory call at index i."""
+        meth, call_args, old_widget = (widget._replay_calls[i][0],
+                                       widget._replay_calls[i][1],
+                                       widget._replay_calls[i][2])
+        seq = widget._replay_calls[i][3] if len(widget._replay_calls[i]) > 3 else 0
+        for arg in call_args:
+            if isinstance(arg, Widget):
+                await self._ensure_reconstructed(arg)
+        resolved = [self._resolve_arg(a) for a in call_args]
+        result = await self._call(widget._wid, meth, *resolved)
+        new_widget = self._resolve_return(result)
+
+        await self._transfer_proxy(old_widget, new_widget)
+
+        if (isinstance(old_widget, Widget)
+                and isinstance(new_widget, Widget)
+                and old_widget is not new_widget):
+            new_wid = new_widget._wid
+            old_widget._wid = new_wid
+            self._widget_map[new_wid] = old_widget
+
+        if (isinstance(old_widget, Widget)
+                and isinstance(new_widget, Widget)):
+            if old_widget._replay_calls:
+                new_widget._replay_calls = []
+                await self._replay_factory_calls_from(
+                    old_widget, new_widget)
+
+        widget._replay_calls[i] = (meth, call_args, old_widget, seq)
 
     async def _replay_factory_calls_from(self, proxy, real):
         """Recursively replay a proxy widget's factory sub-tree onto a
         real widget.  Called when the proxy accumulated add_name /
         add_action calls before any browser was connected."""
-        for meth, call_args, sub_proxy in proxy._replay_calls:
+        for entry in proxy._replay_calls:
+            meth, call_args, sub_proxy = entry[0], entry[1], entry[2]
+            seq = entry[3] if len(entry) > 3 else 0
             resolved = [self._resolve_arg(a) for a in call_args]
             result = await self._call(real._wid, meth, *resolved)
             sub_new = self._resolve_return(result)
@@ -738,14 +781,23 @@ class Session:
 
             if (isinstance(sub_proxy, Widget)
                     and isinstance(sub_new, Widget)
+                    and sub_proxy is not sub_new):
+                sub_proxy._wid = sub_new._wid
+                self._widget_map[sub_new._wid] = sub_proxy
+
+            if (isinstance(sub_proxy, Widget)
+                    and isinstance(sub_new, Widget)
                     and sub_proxy._replay_calls):
                 sub_new._replay_calls = []
                 await self._replay_factory_calls_from(sub_proxy, sub_new)
 
-            real._replay_calls.append((meth, call_args, sub_new))
+            real._replay_calls.append((meth, call_args, sub_proxy, seq))
 
     async def _reconstruct_widget(self, widget):
         """Replay a single widget's creation, state, and callbacks."""
+        if widget._wid in self._reconstructed_wids:
+            return
+        self._reconstructed_wids.add(widget._wid)
         defn = WIDGETS[widget._js_class]
 
         # 1. Create the widget with its original constructor args
@@ -808,22 +860,9 @@ class Session:
             else:
                 await self._call(widget._wid, method_name, value)
 
-        # 3. Attach to parent
-        if widget._parent is not None:
-            for child, extra_args, child_method in widget._parent._children:
-                if child is widget:
-                    resolved_widget = self._resolve_arg(widget)
-                    resolved_args = [self._resolve_arg(a) for a in extra_args]
-                    result = await self._call(
-                        widget._parent._wid, child_method,
-                        resolved_widget, *resolved_args)
-                    result = self._resolve_return(result)
-                    if (isinstance(result, Widget) and result is not widget):
-                        result._child_content = widget
-                    break
-
-        # 4. Replay factory calls (e.g. add_action, add_name, add_separator)
-        await self._replay_factory_calls(widget)
+        # 3. Attach children and replay factory calls in the original
+        #    interleaved order.
+        await self._replay_interleaved(widget)
 
         # 5. Re-register callbacks (save and clear first to avoid
         #    duplicates, since on()/add_callback() append to the list)
@@ -868,6 +907,7 @@ class Session:
         # yet, so _listen must re-send "listen" messages for every action.
         self._callbacks.clear()
 
+        self._reconstructed_wids = set()
         await self._send({"type": "reconstruct-start",
                           "next_wid": self._next_wid})
         for widget in self.walk_widget_tree():
@@ -923,6 +963,7 @@ class Session:
                         await self._call(widget._wid, method_name)
 
         await self._send({"type": "reconstruct-end"})
+        self._reconstructed_wids = None
 
     async def close(self):
         """Close all WebSocket connections for this session."""

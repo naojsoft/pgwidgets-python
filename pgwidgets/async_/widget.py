@@ -80,6 +80,7 @@ class Widget:
         self._registered_callbacks = {}
         self._auto_sync_actions = set()
         self._replay_calls = []
+        self._add_seq = 0
 
         # Parse args/kwargs against definition
         pos_names = defn.get("args", [])
@@ -458,10 +459,10 @@ def _make_child_method(method_name, param_names, child_type):
             args = _resolve_kwargs(method_name, param_names, args, kwargs)
             # Detach all children
             roots = self._session._root_widgets
-            for child, _, _ in self._children:
-                child._parent = None
-                if child not in roots:
-                    roots.append(child)
+            for entry in self._children:
+                entry[0]._parent = None
+                if entry[0] not in roots:
+                    roots.append(entry[0])
             self._children = []
             return await self._call(method_name, *args)
         method.__name__ = method_name
@@ -482,22 +483,24 @@ def _make_child_method(method_name, param_names, child_type):
             if child_type == "remove":
                 # Remove child from parent tracking
                 self._children = [
-                    (c, ea, mn) for c, ea, mn in self._children
-                    if c is not child]
+                    entry for entry in self._children
+                    if entry[0] is not child]
                 child._parent = None
                 # Child becomes a root again
                 roots = self._session._root_widgets
                 if child not in roots:
                     roots.append(child)
             elif child_type == "single":
-                for old_child, _, _ in self._children:
-                    old_child._parent = None
+                for entry in self._children:
+                    entry[0]._parent = None
                     roots = self._session._root_widgets
-                    if old_child not in roots:
-                        roots.append(old_child)
-                self._children = [(child, extra_args, method_name)]
+                    if entry[0] not in roots:
+                        roots.append(entry[0])
+                self._children = [(child, extra_args, method_name, self._add_seq)]
+                self._add_seq += 1
             else:
-                self._children.append((child, extra_args, method_name))
+                self._children.append((child, extra_args, method_name, self._add_seq))
+                self._add_seq += 1
             if child_type != "remove":
                 child._parent = self
                 try:
@@ -528,7 +531,8 @@ def _make_child_method(method_name, param_names, child_type):
             result._child_content = child
 
         if is_replay and not isinstance(child, Widget):
-            self._replay_calls.append((method_name, args, result))
+            self._replay_calls.append((method_name, args, result, self._add_seq))
+            self._add_seq += 1
 
         return result
     method.__name__ = method_name
@@ -546,13 +550,14 @@ def _make_action(method_name, param_names):
     async def method(self, *args, **kwargs):
         args = _resolve_kwargs(method_name, param_names, args, kwargs)
         if select_key and args and isinstance(args[0], Widget):
-            for i, (ch, _, _) in enumerate(self._children):
-                if ch is args[0]:
+            for i, entry in enumerate(self._children):
+                if entry[0] is args[0]:
                     self._state[select_key] = i
                     break
         result = await self._call(method_name, *args)
         if is_replay:
-            self._replay_calls.append((method_name, args, result))
+            self._replay_calls.append((method_name, args, result, self._add_seq))
+            self._add_seq += 1
         return result
     method.__name__ = method_name
     method.__qualname__ = f"Widget.{method_name}"

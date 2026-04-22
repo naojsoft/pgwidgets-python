@@ -60,7 +60,8 @@ JS_ONLY_METHODS = {
     # TabWidget lookups
     "get_tab_id", "get_child", "index_of",
     # MDIWidget
-    "get_subwin", "get_configuration",
+    "get_subwin", "get_subwindows", "get_configuration",
+    "get_child_size", "get_child_position",
     # Button icon (set_icon is an action, so get_icon must round-trip)
     "get_icon",
 }
@@ -103,6 +104,7 @@ ACTION_METHODS = {
     "append_text", "insert_alpha", "delete_alpha",
     # TabWidget/MDI child management
     "show_widget", "close_widget", "close_child",
+    "move", "move_child", "resize_child",
     "highlight_tab",
     # Splitter per-child
     "set_minimum_size",
@@ -229,6 +231,9 @@ STATE_DEFAULTS = {
     "TextArea": {"text": ""},
     "TextSource": {"text": ""},
     "ComboBox": {"text": ""},
+    "TabWidget": {"index": -1},
+    "StackWidget": {"index": -1},
+    "MDIWidget": {"index": -1},
 }
 
 # Widgets with incrementally-built item lists.
@@ -282,8 +287,8 @@ def _index_to_widget(self, index):
     return self._children[index][0]
 
 def _index_of(self, child):
-    for i, (ch, _, _) in enumerate(self._children):
-        if ch is child:
+    for i, entry in enumerate(self._children):
+        if entry[0] is child:
             return i
     return -1
 
@@ -294,9 +299,9 @@ def _dialog_popup(self, x=None, y=None):
     return self._call("popup", x, y)
 
 def _get_menu(self, name):
-    for method_name, args, result in self._replay_calls:
-        if method_name == "add_menu" and args and args[0] == name:
-            return result
+    for entry in self._replay_calls:
+        if entry[0] == "add_menu" and entry[1] and entry[1][0] == name:
+            return entry[2]
     return None
 
 CUSTOM_METHODS = {
