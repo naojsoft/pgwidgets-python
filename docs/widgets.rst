@@ -57,10 +57,12 @@ All widgets (except Timer and FileDialog) have these methods:
      - Set the mouse cursor.
    * - ``add_cursor(name, url, hotspot_x, hotspot_y, size)``
      - Register a custom cursor from an image URL or file path.
+   * - ``has_callback(action)``
+     - Return True if this widget supports the given callback action.
    * - ``destroy()``
      - Remove the widget from the browser and Python registry.
 
-Container widgets also have ``get_children()``.
+Container widgets also have ``get_children()``, ``has_callback(action)``, and fire ``child-added`` / ``child-removed`` callbacks.
 
 Callback Registration
 ~~~~~~~~~~~~~~~~~~~~~
@@ -89,7 +91,7 @@ Vertical box layout.
 
 - **Options:** (none)
 - **Methods:** ``add_widget(child, stretch)``, ``set_spacing(gap)``
-- **Callbacks:** (none)
+- **Callbacks:** ``child-added``, ``child-removed``
 
 .. code-block:: python
 
@@ -103,6 +105,7 @@ HBox
 Horizontal box layout. Same interface as VBox.
 
 - **Methods:** ``add_widget(child, stretch)``, ``set_spacing(gap)``
+- **Callbacks:** ``child-added``, ``child-removed``
 
 ButtonBox
 ~~~~~~~~~
@@ -113,6 +116,7 @@ with labels centered.
 - **Options:** ``orientation``, ``halign``
 - **Methods:** ``add_widget(child, stretch)``, ``insert_widget(index, child, stretch)``,
   ``set_spacing(gap)``, ``set_halign(halign)``
+- **Callbacks:** ``child-added``, ``child-removed``
 
 The ``halign`` option controls horizontal alignment of the buttons within
 the box: ``'left'``, ``'center'`` (default), or ``'right'``.
@@ -129,6 +133,7 @@ Grid layout.
   ``insert_row(index, widgets)``, ``append_row(widgets)``,
   ``delete_row(index)``, ``insert_column(index, widgets)``,
   ``append_column(widgets)``, ``delete_column(index)``
+- **Callbacks:** ``child-added``, ``child-removed``
 
 Splitter
 ~~~~~~~~
@@ -138,7 +143,7 @@ Resizable split pane.
 - **Options:** ``orientation``
 - **Methods:** ``add_widget(child)``, ``set_sizes(sizes)``, ``get_sizes()``,
   ``set_minimum_size(child, min_px)``
-- **Callbacks:** ``sizing``
+- **Callbacks:** ``child-added``, ``child-removed``, ``sizing``
 
 Frame
 ~~~~~
@@ -174,7 +179,7 @@ Tabbed container.
   ``close_widget(child)``, ``set_index(index)``, ``get_index()``,
   ``get_tab_id(child)``, ``get_child(tab_id)``, ``index_of(child)``,
   ``highlight_tab(child, bgcolor)``, ``set_tab_position(tabpos)``
-- **Callbacks:** ``page-switch``, ``page-close``
+- **Callbacks:** ``child-added``, ``child-removed``, ``page-switch``, ``page-close``
 
 .. code-block:: python
 
@@ -188,8 +193,9 @@ StackWidget
 Stacked pages (like tabs without the tab bar).
 
 - **Methods:** ``add_widget(child, options)``, ``show_widget(child)``,
-  ``set_index(index)``, ``get_index()``
-- **Callbacks:** ``page-switch``
+  ``set_index(index)``, ``get_index()``, ``index_of(child)``,
+  ``index_to_widget(index)``
+- **Callbacks:** ``child-added``, ``child-removed``, ``page-switch``, ``page-close``
 
 MDIWidget
 ~~~~~~~~~
@@ -198,8 +204,11 @@ Multiple-document interface container.
 
 - **Methods:** ``add_widget(child, options)``, ``cascade_windows()``,
   ``tile_windows()``, ``get_subwin(child)``, ``close_child(child)``,
-  ``set_resistance(value)``
-- **Callbacks:** ``page-switch``, ``page-close``
+  ``set_resistance(value)``, ``get_subwindows()``,
+  ``move_child(child, x, y)``, ``resize_child(child, width, height)``,
+  ``get_child_size(child)``, ``get_child_position(child)``,
+  ``index_of(child)``, ``index_to_widget(index)``
+- **Callbacks:** ``child-added``, ``child-removed``, ``page-switch``, ``page-close``, ``scrolled``
 
 Windows
 -------
@@ -239,7 +248,7 @@ optional row of buttons at the bottom.
 - **Options:** ``autoclose``, ``resizable``, ``moveable``, ``modal``
 - **Methods:** ``add_widget(child, stretch)``, ``insert_widget(index, child, stretch)``,
   ``set_spacing(gap)``, ``popup(x, y)``, ``set_modal(tf)``
-- **Callbacks:** ``activated`` -- fires with the button value when clicked.
+- **Callbacks:** ``child-added``, ``child-removed``, ``activated`` -- fires with the button value when clicked.
 
 Add content directly to the dialog using ``add_widget()``. The content area
 is a vertical box layout, so children stack top-to-bottom with optional
@@ -449,7 +458,7 @@ ScrollBar
 
 - **Options:** ``orientation``, ``thickness``
 - **Methods:** ``set_scroll_percent(pct)``, ``get_scroll_percent()``,
-  ``set_thumb_width(pct)``
+  ``set_thumb_percent(pct)``
 - **Callbacks:** ``activated``
 
 ProgressBar

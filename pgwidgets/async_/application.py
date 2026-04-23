@@ -382,20 +382,36 @@ class Session:
             return
         cb_args = (wid, *args)
         mode = self._app._concurrency
+        logger = self._logger
         for handler in handlers:
             if mode == "concurrent":
-                asyncio.ensure_future(handler(*cb_args))
+                asyncio.ensure_future(
+                    self._safe_dispatch(handler, cb_args, logger))
             elif mode == "per_session":
                 asyncio.ensure_future(
                     self._serialized_dispatch(
-                        handler, cb_args, self._cb_lock))
+                        handler, cb_args, self._cb_lock, logger))
             else:  # serialized
                 asyncio.ensure_future(
                     self._serialized_dispatch(
-                        handler, cb_args, self._app._cb_lock))
+                        handler, cb_args, self._app._cb_lock, logger))
 
     @staticmethod
-    async def _serialized_dispatch(handler, args, lock):
+    async def _safe_dispatch(handler, args, logger=None):
+        """Run handler without a lock, logging exceptions."""
+        try:
+            result = handler(*args)
+            if hasattr(result, "__await__"):
+                await result
+        except Exception:
+            if logger is not None:
+                logger.error("Exception in callback handler",
+                             exc_info=True)
+            else:
+                traceback.print_exc()
+
+    @staticmethod
+    async def _serialized_dispatch(handler, args, lock, logger=None):
         """Run handler under a lock for serialized execution."""
         async with lock:
             try:
@@ -403,7 +419,11 @@ class Session:
                 if hasattr(result, "__await__"):
                     await result
             except Exception:
-                traceback.print_exc()
+                if logger is not None:
+                    logger.error("Exception in callback handler",
+                                 exc_info=True)
+                else:
+                    traceback.print_exc()
 
     async def _send(self, msg):
         """Send a message to the primary browser and wait for the result.

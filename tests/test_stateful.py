@@ -183,10 +183,10 @@ class TestChildTracking:
         vbox.add_widget(btn, 0)
 
         assert len(vbox._children) == 1
-        child, args, meth = vbox._children[0]
-        assert child is btn
-        assert args == (0,)
-        assert meth == "add_widget"
+        entry = vbox._children[0]
+        assert entry[0] is btn
+        assert entry[1] == (0,)
+        assert entry[2] == "add_widget"
 
     def test_add_widget_sets_parent(self):
         s = MockSession()

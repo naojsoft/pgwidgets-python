@@ -77,11 +77,17 @@ common patterns:
      - Dialog
      - ``(button_text: str)``
    * - ``page-switch``
-     - TabWidget, StackWidget
-     - ``(index: int)``
+     - TabWidget, StackWidget, MDIWidget
+     - ``(child: Widget, index: int)``
    * - ``page-close``
-     - TabWidget, MDIWidget
-     - ``(index: int)``
+     - TabWidget, StackWidget, MDIWidget
+     - ``(child: Widget)``
+   * - ``child-added``
+     - All containers
+     - ``(child: Widget)``
+   * - ``child-removed``
+     - All containers
+     - ``(child: Widget)``
    * - ``selected``
      - TreeView, TableView
      - ``(selected_items)``

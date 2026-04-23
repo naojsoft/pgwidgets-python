@@ -263,6 +263,13 @@ class Widget:
             handler(*resolved, *extra_args, **extra_kwargs)
         self._session._listen(self._wid, action, wrapper)
 
+    def has_callback(self, action):
+        """Return True if this widget supports the given callback action."""
+        defn = self._defn
+        if defn is None:
+            return False
+        return action in defn.get("callbacks", [])
+
     def add_callback(self, action, handler, *extra_args, **extra_kwargs):
         """Register a callback. The handler receives
         ``(widget, *callback_args, *extra_args, **extra_kwargs)``.

@@ -301,6 +301,13 @@ class Widget:
                 await result
         await self._session._listen(self._wid, action, wrapper)
 
+    def has_callback(self, action):
+        """Return True if this widget supports the given callback action."""
+        defn = self._defn
+        if defn is None:
+            return False
+        return action in defn.get("callbacks", [])
+
     async def add_callback(self, action, handler, *extra_args, **extra_kwargs):
         """Register a callback. The handler receives
         ``(widget, *callback_args, *extra_args, **extra_kwargs)``.

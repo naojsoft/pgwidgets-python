@@ -42,7 +42,7 @@ class _Namespace:
     pass
 
 
-def _run_queue_loop(cb_queue, stop_event):
+def _run_queue_loop(cb_queue, stop_event, logger=None):
     """Drain a callback queue until stop_event is set.
 
     Used by per-session threads and the main-thread serialized loop.
@@ -61,6 +61,9 @@ def _run_queue_loop(cb_queue, stop_event):
         except Exception as e:
             if result_slot is not None:
                 result_slot['error'] = e
+            elif logger is not None:
+                logger.error("Exception in callback handler",
+                             exc_info=True)
             else:
                 traceback.print_exc()
         finally:
@@ -159,7 +162,7 @@ class Session:
         self._stop_event = threading.Event()
         self._cb_thread = threading.Thread(
             target=_run_queue_loop,
-            args=(self._cb_queue, self._stop_event),
+            args=(self._cb_queue, self._stop_event, self._logger),
             daemon=True,
             name=f"session-{self._id}",
         )
@@ -1536,7 +1539,8 @@ class Application:
             self.start()
         try:
             if self._concurrency == "serialized":
-                _run_queue_loop(self._cb_queue, self._shutdown)
+                _run_queue_loop(self._cb_queue, self._shutdown,
+                                self._logger)
             else:
                 self._run_idle_loop()
         except KeyboardInterrupt:
@@ -1584,7 +1588,9 @@ class Application:
                     if result_slot is not None:
                         result_slot['error'] = e
                     else:
-                        traceback.print_exc()
+                        self._logger.error(
+                            "Exception in callback handler",
+                            exc_info=True)
                 finally:
                     if result_slot is not None:
                         result_slot['event'].set()
