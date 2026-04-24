@@ -972,6 +972,16 @@ class Session:
 
         # 5. Re-register callbacks (save and clear first to avoid
         #    duplicates, since on()/add_callback() append to the list)
+        #    Note: factory-created widgets (MenuAction, etc.) have their
+        #    callbacks transferred by _transfer_proxy during step 3.
+        self._reregister_callbacks(widget)
+
+    def _reregister_callbacks(self, widget):
+        """Re-register user callbacks and auto-sync listeners on *widget*.
+
+        Clears _registered_callbacks first to avoid duplicates (since
+        on()/add_callback() append to the list).
+        """
         saved_cbs = dict(widget._registered_callbacks)
         widget._registered_callbacks = {}
         for action, entries in saved_cbs.items():
@@ -982,8 +992,8 @@ class Session:
                     widget.add_callback(action, handler, *extra_args,
                                         **extra_kwargs)
 
-        # 6. Re-register auto-sync listeners (state-syncing callbacks
-        #    not covered by user-registered callbacks above)
+        # Auto-sync listeners (state-syncing callbacks not covered by
+        # user-registered callbacks above)
         for action in widget._auto_sync_actions:
             if action not in widget._registered_callbacks:
                 self._listen(widget._wid, action, lambda wid, *a: None)
