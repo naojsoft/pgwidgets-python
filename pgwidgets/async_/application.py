@@ -1152,38 +1152,40 @@ class Application:
         reconnect_sid = ack.get("session_id")
         reconnect_token = ack.get("token")
 
-        # Try to reconnect to an existing session.
+        # If the browser provided a session_id, it must match an
+        # existing session with the correct token — otherwise we close
+        # with a retry-able code so the browser keeps trying (the
+        # user's code may not have called create_session yet).
         session = None
         is_reconnect = False
-        if reconnect_sid is not None and reconnect_token is not None:
+        if reconnect_sid is not None:
             existing = self._sessions.get(reconnect_sid)
-            if existing is not None:
-                if existing.token == reconnect_token:
-                    session = existing
-                    is_reconnect = True
-                    self._logger.info(
-                        f"Session {reconnect_sid}: browser reconnecting.")
-                else:
-                    # Session exists but wrong token — reject.
-                    self._logger.warning(
-                        f"Rejected connection: invalid session credentials "
-                        f"(session_id={reconnect_sid}).")
-                    await ws.close(4001, "Invalid session credentials")
-                    return
-            # else: session not found (e.g. server restarted) — fall
-            # through to create a new session, preserving the
-            # browser's token so it can reconnect without a refresh.
+            if (existing is not None and reconnect_token is not None
+                    and existing.token == reconnect_token):
+                session = existing
+                is_reconnect = True
+                self._logger.info(
+                    f"Session {reconnect_sid}: browser reconnecting.")
+            else:
+                # Not yet ready (or wrong token).  Close with code 1013
+                # "Try Again Later" — non-4xxx so the browser retries.
+                self._logger.info(
+                    f"Connection deferred (session_id={reconnect_sid}): "
+                    f"session not yet ready or token mismatch.")
+                await ws.close(1013, "Session not yet ready")
+                return
 
         if session is None:
-            # New session — acquire a slot if max_sessions is set.
+            # No session_id from browser — auto-create a fresh session
+            # with a freshly generated token (ignore any token the
+            # browser sent so a stale token can't be reused).
             if self._session_semaphore is not None:
                 await self._session_semaphore.acquire()
 
             session_id = self._next_session_id
             self._next_session_id += 1
 
-            session = Session(self, session_id, ws=ws,
-                              token=reconnect_token)
+            session = Session(self, session_id, ws=ws, token=None)
 
             # Set up per-session lock if needed.
             if self._concurrency == "per_session":
@@ -1266,6 +1268,16 @@ class Application:
             session_id = self._next_session_id
             self._next_session_id += 1
         elif session_id in self._sessions:
+            # If the existing session was auto-created by a browser
+            # reconnect with the same token, return it so the user's
+            # code can build the UI on the live session instead of
+            # erroring out.  Otherwise treat as a real conflict.
+            existing = self._sessions[session_id]
+            if token is not None and existing.token == token:
+                self._logger.info(
+                    f"Session {session_id} already exists with "
+                    f"matching token; reusing it.")
+                return existing
             raise ValueError(
                 f"Session {session_id!r} already exists")
 
