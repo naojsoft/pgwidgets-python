@@ -87,6 +87,30 @@ class TestStateTracking:
         label.resize(400, 300)
         assert label._state["size"] == (400, 300)
 
+    def test_set_min_size_stores_state(self):
+        s = MockSession()
+        label = _make(s, "Label", 1)
+        label.set_min_size(100, 50)
+        assert label._state["min_size"] == (100, 50)
+
+    def test_set_min_size_allows_none(self):
+        s = MockSession()
+        label = _make(s, "Label", 1)
+        label.set_min_size(None, 50)
+        assert label._state["min_size"] == (None, 50)
+
+    def test_set_max_size_stores_state(self):
+        s = MockSession()
+        label = _make(s, "Label", 1)
+        label.set_max_size(200, 100)
+        assert label._state["max_size"] == (200, 100)
+
+    def test_set_max_size_allows_none(self):
+        s = MockSession()
+        label = _make(s, "Label", 1)
+        label.set_max_size(200, None)
+        assert label._state["max_size"] == (200, None)
+
     def test_show_stores_visible_true(self):
         s = MockSession()
         label = _make(s, "Label", 1)

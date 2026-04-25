@@ -69,7 +69,8 @@ def test_callback_base_has_fewer_methods():
     resize, show, hide."""
     classes = build_all_widget_classes()
     dom_methods = {"resize", "show", "hide", "set_border_width",
-                   "set_font", "set_padding"}
+                   "set_font", "set_padding",
+                   "set_min_size", "set_max_size"}
     for name, cls in classes.items():
         defn = WIDGETS[name]
         if defn["base"] == "callback":
