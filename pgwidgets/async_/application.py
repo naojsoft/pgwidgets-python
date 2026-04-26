@@ -93,6 +93,9 @@ class Session:
 
         self._reconstructing = False  # suppress callbacks during reconstruction
 
+        # Browser viewport size (updated by 'viewport' messages from JS).
+        self._screen_size = (0, 0)
+
         # Per-session lock (for "per_session" and "serialized" modes).
         self._cb_lock = None
 
@@ -115,6 +118,27 @@ class Session:
     def is_connected(self):
         """True if at least one browser is connected."""
         return len(self._connections) > 0
+
+    def get_screen_size(self):
+        """Return the browser viewport size as (width, height) in pixels.
+
+        The value is updated whenever the browser connects or its window
+        is resized.  Returns (0, 0) before the first viewport message
+        arrives (e.g. no browser has connected yet).
+        """
+        return self._screen_size
+
+    def get_url(self):
+        """Return the connection URL for this session, with session_id
+        and token query parameters.
+
+        Returns None if the Application is not running its built-in
+        HTTP server.
+        """
+        base = self._app.url
+        if base is None:
+            return None
+        return f"{base}?session={self._id}&token={self._token}"
 
     @property
     def connections(self):
@@ -152,6 +176,9 @@ class Session:
                     future.set_exception(RuntimeError(msg["error"]))
                 else:
                     future.set_result(msg)
+
+        elif msg_type == "viewport":
+            self._screen_size = (msg.get("width", 0), msg.get("height", 0))
 
         elif msg_type == "file-chunk":
             self._handle_file_chunk(msg)
@@ -1108,6 +1135,39 @@ class Application:
         self._on_disconnect = handler
         return handler
 
+    def register_widget(self, cls, name=None):
+        """Register a widget subclass so it appears in
+        ``session.get_widgets()`` with the session pre-bound.
+
+        After registering, instances can be created without explicitly
+        passing the session::
+
+            class StatusButton(Button):
+                def __init__(self, session, text, **kwargs):
+                    super().__init__(session, text, **kwargs)
+                    ...
+
+            app.register_widget(StatusButton)
+
+            @app.on_connect
+            async def setup(session):
+                W = session.get_widgets()
+                btn = W.StatusButton("Go")   # session auto-injected
+
+        Parameters
+        ----------
+        cls : type
+            Widget subclass.  Its constructor must accept ``session`` as
+            the first positional argument.
+        name : str, optional
+            Attribute name under ``session.get_widgets()``.  Defaults
+            to ``cls.__name__``.
+        """
+        if name is None:
+            name = cls.__name__
+        self._widget_classes[name] = cls
+        return cls
+
     @property
     def sessions(self):
         """Dict of active sessions (session_id -> Session)."""
@@ -1152,40 +1212,52 @@ class Application:
         reconnect_sid = ack.get("session_id")
         reconnect_token = ack.get("token")
 
-        # If the browser provided a session_id, it must match an
-        # existing session with the correct token — otherwise we close
-        # with a retry-able code so the browser keeps trying (the
-        # user's code may not have called create_session yet).
+        # If the browser provided a session_id:
+        #  - matches existing + token matches → reconnect
+        #  - matches existing + token mismatch → reject (4001)
+        #  - no matching session → auto-create with browser's id+token
+        #    so the URL/credentials persist across server restarts
+        # If the browser did NOT provide a session_id, auto-allocate
+        # a fresh session with a new token.
         session = None
         is_reconnect = False
         if reconnect_sid is not None:
             existing = self._sessions.get(reconnect_sid)
-            if (existing is not None and reconnect_token is not None
-                    and existing.token == reconnect_token):
-                session = existing
-                is_reconnect = True
-                self._logger.info(
-                    f"Session {reconnect_sid}: browser reconnecting.")
-            else:
-                # Not yet ready (or wrong token).  Close with code 1013
-                # "Try Again Later" — non-4xxx so the browser retries.
-                self._logger.info(
-                    f"Connection deferred (session_id={reconnect_sid}): "
-                    f"session not yet ready or token mismatch.")
-                await ws.close(1013, "Session not yet ready")
-                return
+            if existing is not None:
+                if (reconnect_token is not None
+                        and existing.token == reconnect_token):
+                    session = existing
+                    is_reconnect = True
+                    self._logger.info(
+                        f"Session {reconnect_sid}: browser reconnecting.")
+                else:
+                    # Token mismatch on existing session — real conflict.
+                    self._logger.warning(
+                        f"Rejected connection: invalid credentials for "
+                        f"session_id={reconnect_sid}.")
+                    await ws.close(4001, "Invalid session credentials")
+                    return
 
         if session is None:
-            # No session_id from browser — auto-create a fresh session
-            # with a freshly generated token (ignore any token the
-            # browser sent so a stale token can't be reused).
+            # New session (either no id from browser, or browser's id
+            # is unknown to this server — e.g. after a restart).
             if self._session_semaphore is not None:
                 await self._session_semaphore.acquire()
 
-            session_id = self._next_session_id
-            self._next_session_id += 1
+            if reconnect_sid is not None:
+                # Honor the browser's id and token so the URL remains
+                # stable across restarts.
+                session_id = reconnect_sid
+                if (isinstance(session_id, int)
+                        and session_id >= self._next_session_id):
+                    self._next_session_id = session_id + 1
+                session_token = reconnect_token
+            else:
+                session_id = self._next_session_id
+                self._next_session_id += 1
+                session_token = None
 
-            session = Session(self, session_id, ws=ws, token=None)
+            session = Session(self, session_id, ws=ws, token=session_token)
 
             # Set up per-session lock if needed.
             if self._concurrency == "per_session":

@@ -94,7 +94,7 @@ ACTION_METHODS = {
     "toggleContent",
     "raise_", "lower",
     # Timer
-    "start", "cancel",
+    "start", "cancel", "set", "cond_set",
     # Table/Tree row-level modifications (tracked via bulk set_data)
     "add_item", "remove_item", "update_tree", "remove_items",
     "insert_row", "append_row", "delete_row",
@@ -234,6 +234,15 @@ STATE_DEFAULTS = {
     "TabWidget": {"index": -1},
     "StackWidget": {"index": -1},
     "MDIWidget": {"index": -1},
+}
+
+# Cross-widget default values for state keys, used as a fallback when
+# STATE_DEFAULTS has no per-widget entry.  Lets getters return a
+# sensible value before any browser has reported state (e.g. before
+# the widget has been laid out).
+STATE_KEY_DEFAULTS = {
+    "size": (0, 0),
+    "position": (0, 0),
 }
 
 # Widgets with incrementally-built item lists.

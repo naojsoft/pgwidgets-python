@@ -20,7 +20,7 @@ from pgwidgets.method_types import (
     STATE_SYNC_CALLBACKS, STATE_SYNC_REQUIRES_OPTION,
     WIDGET_CALLBACK_SYNC, CHILD_CLOSE_CALLBACKS,
     FACTORY_RETURN_TYPES, UNSUPPORTED_METHODS, CUSTOM_METHODS,
-    STATE_DEFAULTS,
+    STATE_DEFAULTS, STATE_KEY_DEFAULTS,
 )
 
 
@@ -815,6 +815,8 @@ def _add_classified_method(attrs, method_name, param_names,
 
     elif category == GETTER:
         default = STATE_DEFAULTS.get(widget_name, {}).get(info)
+        if default is None:
+            default = STATE_KEY_DEFAULTS.get(info)
         attrs[method_name] = _make_getter(method_name, info, default)
 
     elif category == CHILD:
