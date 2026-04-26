@@ -43,6 +43,7 @@ familiar Qt/GTK-style API.
    subclassing
    callbacks
    utilities
+   extras
 
 .. toctree::
    :maxdepth: 2
