@@ -29,6 +29,7 @@ from pgwidgets.method_types import (
     STATE_SYNC_CALLBACKS, STATE_SYNC_REQUIRES_OPTION,
     WIDGET_CALLBACK_SYNC, POST_CHILDREN_STATE_KEYS, ITEM_LIST_CONFIG,
     CHILD_CLOSE_CALLBACKS, REPLAY_METHODS, TREE_VIEW_WIDGETS,
+    BINARY_STATE_KEYS,
 )
 from pgwidgets.async_.widget import Widget, build_all_widget_classes
 
@@ -583,6 +584,35 @@ class Session:
             return None
         return result.get("value")
 
+    def _send_binary(self, wid, method, args, data):
+        """Fire-and-forget call that carries a trailing binary payload.
+
+        Sends a JSON header announcing a binary call, then the raw bytes
+        as the next WebSocket frame.  The JS side pairs them by arrival
+        order and dispatches as ``widget[method](*args, data)``.
+
+        Used for image streaming and similar cases where base64 framing
+        in the JSON protocol would inflate the wire size by ~33% and
+        burn CPU on encode/decode.
+        """
+        if not self._connections:
+            return
+        msg_id = self._next_id
+        self._next_id += 1
+        header = json.dumps({
+            "type": "binary-call",
+            "id": msg_id,
+            "wid": wid,
+            "method": method,
+            "args": list(args),
+        })
+        async def _pair(ws):
+            await ws.send(header)
+            await ws.send(data)
+        for ws in self._connections:
+            task = asyncio.ensure_future(_pair(ws))
+            task.add_done_callback(_drain_send_exception)
+
     async def _listen(self, wid, action, handler):
         """Register a callback listener.
 
@@ -945,6 +975,15 @@ class Session:
             if key in POST_CHILDREN_STATE_KEYS:
                 continue
             if key.startswith("_"):
+                continue
+
+            # Binary-payload state (e.g. set_binary_image) replays via
+            # _send_binary so the bytes go in a raw frame, not embedded
+            # as base64 in JSON.
+            if key in BINARY_STATE_KEYS:
+                method_name = BINARY_STATE_KEYS[key]
+                fmt, data = value
+                self._send_binary(widget._wid, method_name, [fmt], data)
                 continue
 
             if key in self._STATE_KEY_TO_SETTER:

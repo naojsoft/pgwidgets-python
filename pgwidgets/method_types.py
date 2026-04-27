@@ -322,6 +322,45 @@ def _menuaction_get_state(self):
     """Alias for MenuAction.get_checked — keeps a single state key."""
     return self.get_checked()
 
+def _image_set_binary_image(self, data, format="jpeg"):
+    """Set the image from raw bytes via a WebSocket binary frame.
+
+    Avoids the ~33% base64 overhead of set_image() and the encode/
+    decode CPU cost on both sides.  Suited for animation / streaming.
+
+    Parameters
+    ----------
+    data : bytes
+        Raw image bytes (JPEG, PNG, WebP, GIF).
+    format : str, optional
+        Image format identifier.  Used to set the MIME type so the
+        browser knows how to decode.  Default 'jpeg'.
+
+    Notes
+    -----
+    The latest (format, data) is stored in _state["binary_image"] so
+    that reconstruction after a browser reconnect re-sends the most
+    recently set image.  Earlier set_image (URL-based) state is
+    cleared since the two methods are mutually exclusive.
+    """
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        raise TypeError(
+            "set_binary_image requires bytes, got " + type(data).__name__)
+    data = bytes(data)
+    self._state.pop("image", None)
+    self._state["binary_image"] = (format, data)
+    self._session._send_binary(
+        self._wid, "set_binary_image", [format], data)
+
+# State keys whose value is a (format, bytes) tuple that must be
+# replayed via _send_binary instead of _call during reconstruction.
+# Maps state_key -> JS-side method name to invoke.  The replay packs
+# args as [format] and the raw bytes as the binary frame.
+BINARY_STATE_KEYS = {
+    "binary_image": "set_binary_image",
+}
+
+
 CUSTOM_METHODS = {
     ("TabWidget", "index_to_widget"): _index_to_widget,
     ("TabWidget", "index_of"): _index_of,
@@ -334,6 +373,7 @@ CUSTOM_METHODS = {
     ("Dialog", "popup"): _dialog_popup,
     ("MenuAction", "set_state"): _menuaction_set_state,
     ("MenuAction", "get_state"): _menuaction_get_state,
+    ("Image", "set_binary_image"): _image_set_binary_image,
 }
 
 
