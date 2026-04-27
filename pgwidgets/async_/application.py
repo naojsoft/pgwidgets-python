@@ -648,6 +648,20 @@ class Session:
             return {k: self._resolve_arg(v) for k, v in arg.items()}
         return arg
 
+    def _iter_widget_refs(self, value):
+        """Yield every Widget instance found anywhere inside *value*
+        (lists and dicts are walked recursively).  Used to discover
+        widget references embedded in constructor args/options so
+        reconstruction can build them in dependency order."""
+        if isinstance(value, Widget):
+            yield value
+        elif isinstance(value, dict):
+            for v in value.values():
+                yield from self._iter_widget_refs(v)
+        elif isinstance(value, (list, tuple)):
+            for v in value:
+                yield from self._iter_widget_refs(v)
+
     def _resolve_return(self, val, js_class=None):
         """Convert wire refs back to Widget instances in return values.
 
@@ -878,10 +892,15 @@ class Session:
         self._reconstructed_wids.add(widget._wid)
         defn = WIDGETS[widget._js_class]
 
-        # 1. Create the widget with its original constructor args
+        # 1. Create the widget with its original constructor args.
+        #    Ensure any Widget references embedded in the args/options
+        #    (e.g. a Label's `menu` option pointing at a Menu widget)
+        #    are reconstructed first, so JS can resolve their wids.
         js_args = list(widget._constructor_args)
         if widget._constructor_options:
             js_args.append(dict(widget._constructor_options))
+        for w in self._iter_widget_refs(js_args):
+            await self._ensure_reconstructed(w)
         resolved = [self._resolve_arg(a) for a in js_args]
         await self._send({
             "type": "create",

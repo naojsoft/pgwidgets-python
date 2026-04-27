@@ -639,13 +639,27 @@ def _add_item_list_methods(attrs, item_cfg, all_methods):
     insert_name = item_cfg.get("insert")
     delete_name = item_cfg.get("delete")
 
+    def _auto_select_first_if_empty(self, was_empty, items):
+        """If the list went from empty to one item AND the user hasn't
+        explicitly called set_index, mirror the JS-side auto-selection
+        in our local state so get_index/get_text return the right thing
+        before any browser callback round-trips."""
+        if not was_empty:
+            return
+        if "index" in self._state:
+            return
+        self._state["index"] = 0
+        self._state["text"] = items[0]
+
     if append_name and append_name in all_methods:
         param_names = all_methods[append_name]
         def make_append(mn, pn):
             async def method(self, *args, **kwargs):
                 args = _resolve_kwargs(mn, pn, args, kwargs)
                 items = self._state.setdefault(key, [])
+                was_empty = len(items) == 0
                 items.append(args[0])
+                _auto_select_first_if_empty(self, was_empty, items)
                 return await self._call(mn, *args)
             method.__name__ = mn
             return method
@@ -653,16 +667,27 @@ def _add_item_list_methods(attrs, item_cfg, all_methods):
 
     if insert_name and insert_name in all_methods:
         param_names = all_methods[insert_name]
-        def make_insert(mn, pn):
+        alpha_sort = param_names == ["text"]
+        def make_insert(mn, pn, alpha):
             async def method(self, *args, **kwargs):
                 args = _resolve_kwargs(mn, pn, args, kwargs)
                 items = self._state.setdefault(key, [])
-                text, idx = args[0], args[1] if len(args) > 1 else len(items)
+                was_empty = len(items) == 0
+                text = args[0]
+                if alpha:
+                    idx = len(items)
+                    for i, existing in enumerate(items):
+                        if text < existing:
+                            idx = i
+                            break
+                else:
+                    idx = args[1] if len(args) > 1 else len(items)
                 items.insert(idx, text)
+                _auto_select_first_if_empty(self, was_empty, items)
                 return await self._call(mn, *args)
             method.__name__ = mn
             return method
-        attrs[insert_name] = make_insert(insert_name, param_names)
+        attrs[insert_name] = make_insert(insert_name, param_names, alpha_sort)
 
     if delete_name and delete_name in all_methods:
         param_names = all_methods[delete_name]

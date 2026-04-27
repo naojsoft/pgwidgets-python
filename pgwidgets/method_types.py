@@ -243,6 +243,7 @@ STATE_DEFAULTS = {
 STATE_KEY_DEFAULTS = {
     "size": (0, 0),
     "position": (0, 0),
+    "index": -1,
 }
 
 # Widgets with incrementally-built item lists.
