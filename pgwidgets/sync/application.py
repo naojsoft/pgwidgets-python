@@ -42,6 +42,32 @@ class _Namespace:
     pass
 
 
+def _drain_send_exception(fut):
+    """Done-callback that consumes any exception from a fire-and-forget
+    ws.send() future/task.  Prevents 'Exception ignored in coroutine'
+    warnings when a send happens against a connection that has just
+    closed."""
+    try:
+        fut.result()
+    except Exception:
+        # Connection-closed (and similar) errors are expected during
+        # disconnects — silently drop them so they don't leak as
+        # ignored-coroutine warnings.
+        pass
+
+
+def _schedule_ws_send(loop, ws, payload):
+    """Fire-and-forget ws.send() with exception drain."""
+    fut = asyncio.run_coroutine_threadsafe(ws.send(payload), loop)
+    fut.add_done_callback(_drain_send_exception)
+
+
+def _schedule_ws_close(loop, ws):
+    """Fire-and-forget ws.close() with exception drain."""
+    fut = asyncio.run_coroutine_threadsafe(ws.close(), loop)
+    fut.add_done_callback(_drain_send_exception)
+
+
 def _run_queue_loop(cb_queue, stop_event, logger=None):
     """Drain a callback queue until stop_event is set.
 
@@ -478,12 +504,10 @@ class Session:
         msg["id"] = msg_id
         event = threading.Event()
         self._events[msg_id] = event
-        #print(msg)
         payload = json.dumps(msg)
-        # Primary: wait for result
-        asyncio.run_coroutine_threadsafe(
-            self._connections[0].send(payload), self._app._loop
-        )
+        # Primary: schedule the send; the response (and event signal)
+        # come back via _handle_message, not via the send future.
+        _schedule_ws_send(self._app._loop, self._connections[0], payload)
         # Secondary: fire-and-forget with a separate id (no event)
         if len(self._connections) > 1:
             with self._lock:
@@ -492,9 +516,7 @@ class Session:
             msg_copy = dict(msg, id=ff_id)
             ff_payload = json.dumps(msg_copy)
             for ws in self._connections[1:]:
-                asyncio.run_coroutine_threadsafe(
-                    ws.send(ff_payload), self._app._loop
-                )
+                _schedule_ws_send(self._app._loop, ws, ff_payload)
         event.wait()
         result = self._results.pop(msg_id)
         del self._events[msg_id]
@@ -522,9 +544,7 @@ class Session:
             "silent": True,
         })
         for ws in targets:
-            asyncio.run_coroutine_threadsafe(
-                ws.send(payload), self._app._loop
-            )
+            _schedule_ws_send(self._app._loop, ws, payload)
 
     def _alloc_wid(self):
         with self._lock:
@@ -577,13 +597,19 @@ class Session:
         handlers = self._callbacks.get(key)
         if handlers is None:
             self._callbacks[key] = [handler]
-            self._send({
-                "type": "listen",
-                "wid": wid,
-                "action": action,
-            })
         else:
             handlers.append(handler)
+        # Send the listen message unconditionally.  JS-side _listeners
+        # deduplicates by (wid, action), so sending repeatedly is
+        # harmless.  Doing it unconditionally handles cases where the
+        # JS-side widget was recreated (reconstruct-start clears the
+        # JS registry, parent.set_widget can cycle a child, etc.)
+        # without our session._callbacks being cleared.
+        self._send({
+            "type": "listen",
+            "wid": wid,
+            "action": action,
+        })
 
     def _unlisten(self, wid, action, handler=None):
         """Remove callback listener(s).
@@ -1006,11 +1032,23 @@ class Session:
     def _reregister_callbacks(self, widget):
         """Re-register user callbacks and auto-sync listeners on *widget*.
 
-        Clears _registered_callbacks first to avoid duplicates (since
-        on()/add_callback() append to the list).
+        Clears both the widget-local _registered_callbacks AND the
+        session-level _callbacks entries for this widget, so that the
+        re-registration triggers fresh "listen" messages to the JS side
+        (the JS-side registry was cleared by reconstruct-start, so we
+        must re-send listens, not just store them locally).
         """
         saved_cbs = dict(widget._registered_callbacks)
         widget._registered_callbacks = {}
+        # Drop session-level callbacks for this widget so subsequent
+        # _listen calls treat them as first-time registrations and
+        # actually send the "listen" message to the browser.
+        wid = widget._wid
+        for action in list(saved_cbs.keys()):
+            self._callbacks.pop(f"{wid}:{action}", None)
+        for action in widget._auto_sync_actions:
+            self._callbacks.pop(f"{wid}:{action}", None)
+
         for action, entries in saved_cbs.items():
             for handler, extra_args, extra_kwargs, style in entries:
                 if style == "on":
@@ -1128,8 +1166,7 @@ class Session:
         new connections.
         """
         for ws in list(self._connections):
-            asyncio.run_coroutine_threadsafe(
-                ws.close(), self._app._loop)
+            _schedule_ws_close(self._app._loop, ws)
 
     def destroy(self):
         """Destroy this session completely.

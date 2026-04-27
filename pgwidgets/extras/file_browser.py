@@ -15,63 +15,67 @@ Usage (sync API)::
     fd.popup()
 """
 
+import base64
+import mimetypes
 import os
 import stat
 import time
 
-# ── Icon data URIs ──────────────────────────────────────────────
-# Simple SVG icons encoded as data URIs.  Kept as module-level
-# constants so they are easy to extend for new file types.
+from pgwidgets_js import get_static_path
 
-_ICON_FOLDER = (
-    "data:image/svg+xml,"
-    "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E"
-    "%3Cpath d='M1 3h5l1.5-1.5H15v11H1z' fill='%23e8a735' "
-    "stroke='%23c48820' stroke-width='0.5'/%3E"
-    "%3Cpath d='M1 4.5h14v8.5H1z' fill='%23f0c050'/%3E"
-    "%3C/svg%3E"
-)
 
-_ICON_FILE = (
-    "data:image/svg+xml,"
-    "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E"
-    "%3Cpath d='M3 1h7l3 3v11H3z' fill='%23f0f0f0' "
-    "stroke='%23999' stroke-width='0.5'/%3E"
-    "%3Cpath d='M10 1v3h3' fill='none' stroke='%23999' "
-    "stroke-width='0.5'/%3E"
-    "%3C/svg%3E"
-)
+# ── Icon registry ──────────────────────────────────────────────
+# Maps category name to a data: URI for the icon.  Special
+# categories: "file" (default file icon), "folder" (directories),
+# "parent" (parent directory entry).  Any other key is treated as a
+# lowercase file-extension override (e.g. "py", "jpg") and used in
+# preference to "file" when a matching extension is encountered.
 
-_ICON_PARENT = (
-    "data:image/svg+xml,"
-    "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E"
-    "%3Cpath d='M1 3h5l1.5-1.5H15v11H1z' fill='%23c0c0c0' "
-    "stroke='%23999' stroke-width='0.5'/%3E"
-    "%3Cpath d='M5 8h6M8 5.5v5' stroke='%23666' stroke-width='1.5' "
-    "fill='none'/%3E"
-    "%3C/svg%3E"
-)
+ICONS = {}
 
-# Maps lowercase file extension to icon data URI.
-# Extend this dict to add icons for known file types.
-ICON_BY_EXT = {
-    # Add per-extension overrides here, e.g.:
-    # "py": _ICON_PYTHON,
-    # "jpg": _ICON_IMAGE,
-}
 
-# Default icons by entry type
-ICON_FOLDER = _ICON_FOLDER
-ICON_FILE = _ICON_FILE
-ICON_PARENT = _ICON_PARENT
+def _file_to_data_uri(path):
+    """Read a file and return a base64-encoded data: URI."""
+    mime, _ = mimetypes.guess_type(str(path))
+    if mime is None:
+        mime = "application/octet-stream"
+    with open(path, "rb") as f:
+        data = base64.b64encode(f.read()).decode("ascii")
+    return f"data:{mime};base64,{data}"
+
+
+def set_icon(category, path):
+    """Register an icon for a file/folder category.
+
+    Parameters
+    ----------
+    category : str
+        Category key.  Use ``"file"`` or ``"folder"`` to override the
+        default file/folder icons, ``"parent"`` for the parent-directory
+        entry, or any lowercase file extension (e.g. ``"py"``,
+        ``"jpg"``) to register an extension-specific icon.
+    path : str or Path
+        Path to a local image file.  The file is read once and
+        embedded as a data: URI.
+    """
+    ICONS[category] = _file_to_data_uri(path)
+
+
+# Initialize defaults from the icons that ship with pgwidgets_js.
+_static_icons = get_static_path() / "icons"
+set_icon("file", _static_icons / "file.svg")
+set_icon("folder", _static_icons / "folder.svg")
+# Default parent-directory icon: use the folder icon (callers can
+# override via set_icon("parent", ...) for a distinct up-arrow look).
+ICONS["parent"] = ICONS["folder"]
 
 
 def _icon_for_name(name, is_dir):
     """Return the icon data URI for a filename."""
     if is_dir:
-        return ICON_FOLDER
+        return ICONS["folder"]
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-    return ICON_BY_EXT.get(ext, ICON_FILE)
+    return ICONS.get(ext, ICONS["file"])
 
 
 def _format_size(size_bytes):
@@ -154,9 +158,12 @@ class FileBrowser:
         self._dialog.add_widget(path_bar, 0)
 
         # ── File table ──
+        # Icons are rendered at 14px — the SVG icons in
+        # pgwidgets_js/static/icons have a natural size around 100px
+        # so we explicitly downscale them for a comfortable row height.
         self._table = W.TableView(
             columns=[
-                {"label": "", "type": "icon", "icon_size": 16},
+                {"label": "", "type": "icon", "icon_size": 14},
                 {"label": "Name", "type": "string"},
                 {"label": "Size", "type": "string"},
                 {"label": "Modified", "type": "string"},
@@ -165,7 +172,7 @@ class FileBrowser:
             alternate_row_colors=True,
             sortable=True,
         )
-        self._table.set_column_width(0, 24)
+        self._table.set_column_width(0, 22)
         self._table.on("activated", self._on_row_activated)
         self._table.on("selected", self._on_row_selected)
         self._dialog.add_widget(self._table, 1)
@@ -295,7 +302,7 @@ class FileBrowser:
         # Parent directory entry
         parent = os.path.dirname(self._directory)
         if parent != self._directory:  # not at root
-            rows.append([ICON_PARENT, "..", "", ""])
+            rows.append([ICONS["parent"], "..", "", ""])
 
         for name, is_dir, size, mtime in entries:
             if not is_dir and allowed is not None:
@@ -308,7 +315,7 @@ class FileBrowser:
             rows.append([icon, name, size_str, time_str])
 
         self._table.set_rows(rows)
-        self._table.set_column_width(0, 24)
+        self._table.set_column_width(0, 22)
 
         # Pre-select filename if set
         if self._filename:

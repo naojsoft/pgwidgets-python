@@ -40,6 +40,33 @@ class _Namespace:
     pass
 
 
+def _drain_send_exception(task):
+    """Done-callback that consumes any exception from a fire-and-forget
+    ws.send()/ws.close() task.  Prevents 'exception was never retrieved'
+    warnings when a send happens against a connection that has just
+    closed."""
+    try:
+        task.result()
+    except Exception:
+        # Connection-closed (and similar) errors are expected during
+        # disconnects — silently drop them so they don't leak.
+        pass
+
+
+def _schedule_ws_send(ws, payload):
+    """Fire-and-forget ws.send() — wraps in a task and drains any
+    exception so closed/closing connections don't leak warnings."""
+    task = asyncio.ensure_future(ws.send(payload))
+    task.add_done_callback(_drain_send_exception)
+
+
+def _schedule_ws_close(ws):
+    """Fire-and-forget ws.close() — wraps in a task and drains any
+    exception."""
+    task = asyncio.ensure_future(ws.close())
+    task.add_done_callback(_drain_send_exception)
+
+
 class Session:
     """
     A session that owns a widget tree and its associated state.
@@ -474,7 +501,7 @@ class Session:
             msg_copy = dict(msg, id=ff_id)
             ff_payload = json.dumps(msg_copy)
             for ws in self._connections[1:]:
-                asyncio.ensure_future(ws.send(ff_payload))
+                _schedule_ws_send(ws, ff_payload)
         return await future
 
 
@@ -496,7 +523,7 @@ class Session:
             "silent": True,
         })
         for ws in targets:
-            asyncio.ensure_future(ws.send(payload))
+            _schedule_ws_send(ws, payload)
 
     def _fire_and_forget_listen(self, wid, action):
         """Send a listen message without awaiting a result.
@@ -516,7 +543,7 @@ class Session:
             "action": action,
         })
         for ws in self._connections:
-            asyncio.ensure_future(ws.send(payload))
+            _schedule_ws_send(ws, payload)
 
     def _alloc_wid(self):
         wid = self._next_wid
@@ -561,20 +588,24 @@ class Session:
 
         Multiple handlers can be registered for the same action; all
         will be invoked when the callback fires.  The "listen" message
-        is only sent to the browser for the first handler on a given
-        action (the JS side already supports multiple listeners).
+        is sent to the browser on every registration — the JS side
+        deduplicates (it tracks listeners in its own _listeners set).
+        Sending unconditionally avoids cases where the JS-side widget
+        was recreated (e.g. reconstruct-start clearing the registry,
+        or a parent's set_widget cycling its child) without Python's
+        _callbacks having been cleared.
         """
         key = f"{wid}:{action}"
         handlers = self._callbacks.get(key)
         if handlers is None:
             self._callbacks[key] = [handler]
-            await self._send({
-                "type": "listen",
-                "wid": wid,
-                "action": action,
-            })
         else:
             handlers.append(handler)
+        await self._send({
+            "type": "listen",
+            "wid": wid,
+            "action": action,
+        })
 
     async def _unlisten(self, wid, action, handler=None):
         """Remove callback listener(s).
@@ -920,11 +951,23 @@ class Session:
     async def _reregister_callbacks(self, widget):
         """Re-register user callbacks and auto-sync listeners on *widget*.
 
-        Clears _registered_callbacks first to avoid duplicates (since
-        on()/add_callback() append to the list).
+        Clears both the widget-local _registered_callbacks AND the
+        session-level _callbacks entries for this widget, so that the
+        re-registration triggers fresh "listen" messages to the JS side
+        (the JS-side registry was cleared by reconstruct-start, so we
+        must re-send listens, not just store them locally).
         """
         saved_cbs = dict(widget._registered_callbacks)
         widget._registered_callbacks = {}
+        # Drop session-level callbacks for this widget so subsequent
+        # _listen calls treat them as first-time registrations and
+        # actually send the "listen" message to the browser.
+        wid = widget._wid
+        for action in list(saved_cbs.keys()):
+            self._callbacks.pop(f"{wid}:{action}", None)
+        for action in widget._auto_sync_actions:
+            self._callbacks.pop(f"{wid}:{action}", None)
+
         for action, entries in saved_cbs.items():
             for handler, extra_args, extra_kwargs, style in entries:
                 if style == "on":

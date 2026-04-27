@@ -313,6 +313,14 @@ def _get_menu(self, name):
             return entry[2]
     return None
 
+def _menuaction_set_state(self, tf):
+    """Alias for MenuAction.set_checked — keeps a single state key."""
+    return self.set_checked(tf)
+
+def _menuaction_get_state(self):
+    """Alias for MenuAction.get_checked — keeps a single state key."""
+    return self.get_checked()
+
 CUSTOM_METHODS = {
     ("TabWidget", "index_to_widget"): _index_to_widget,
     ("TabWidget", "index_of"): _index_of,
@@ -323,6 +331,8 @@ CUSTOM_METHODS = {
     ("Menu", "get_menu"): _get_menu,
     ("MenuBar", "get_menu"): _get_menu,
     ("Dialog", "popup"): _dialog_popup,
+    ("MenuAction", "set_state"): _menuaction_set_state,
+    ("MenuAction", "get_state"): _menuaction_get_state,
 }
 
 

@@ -105,6 +105,7 @@ class Widget:
         # Allocate wid and create on JS side
         wid = session._create(js_class, *js_args)
         self._wid = wid
+        self._stale = False
         session._widget_map[wid] = self
 
         # Store constructor info for reconstruction
@@ -161,6 +162,7 @@ class Widget:
         obj._auto_sync_actions = set()
         obj._replay_calls = []
         obj._add_seq = 0
+        obj._stale = False
         return obj
 
     def _register_auto_sync(self):
@@ -242,12 +244,54 @@ class Widget:
             return Widget._to_data_uri(val)
         return val
 
+    def _log_error(self, fmt, *args):
+        """Log an error via the session's logger.  Used for non-fatal
+        JS-side errors so the message goes to wherever the application
+        was configured to send its logs.  Wrapped in try/except so a
+        misbehaving logger handler can never propagate back into the
+        widget call chain."""
+        try:
+            self._session._logger.error(fmt, *args)
+        except Exception:
+            pass
+
     def _call(self, method, *args):
-        """Call a method on the JS widget."""
+        """Call a method on the JS widget.
+
+        If the JS side reports the widget as unknown (e.g. it was
+        destroyed but Python still holds a reference), the widget is
+        marked stale and ``None`` is returned so callers can continue
+        rather than aborting their entire callback chain.  Subsequent
+        calls on the stale widget short-circuit without a round-trip.
+        """
+        if self._stale:
+            return None
         if method in self._FILE_ARG_METHODS:
             args = tuple(self._resolve_file_arg(a) for a in args)
         resolved = [self._session._resolve_arg(a) for a in args]
-        result = self._session._call(self._wid, method, *resolved)
+        try:
+            result = self._session._call(self._wid, method, *resolved)
+        except RuntimeError as e:
+            msg = str(e)
+            if msg.startswith("Unknown widget id"):
+                # The widget itself is gone from the JS side (e.g. it
+                # was destroyed but Python still holds a reference).
+                # Mark stale so subsequent calls on this widget
+                # short-circuit silently, and return None.
+                self._stale = True
+                self._log_error(
+                    "%s wid=%s.%s: %s (widget marked stale)",
+                    self._js_class, self._wid, method, msg)
+                return None
+            if msg.startswith("Unknown method"):
+                # Only this method is missing on the JS side (e.g. the
+                # browser is running an older build).  Don't mark the
+                # widget stale — other methods on it may still work.
+                self._log_error(
+                    "%s wid=%s.%s: %s (skipped)",
+                    self._js_class, self._wid, method, msg)
+                return None
+            raise
         return self._session._resolve_return(result)
 
     def on(self, action, handler, *extra_args, **extra_kwargs):
