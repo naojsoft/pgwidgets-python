@@ -442,41 +442,47 @@ def on_session(session):
             lbl = W.Label("")
             table = W.TableView(
                 columns=[
-                    "Name",
-                    "Department",
-                    {"label": "Salary", "type": "number"},
+                    {"label": "Name",       "key": "NAME",
+                     "type": "string"},
+                    {"label": "Department", "key": "DEPT",
+                     "type": "string"},
+                    {"label": "Salary",     "key": "SALARY",
+                     "type": "integer"},
                 ],
                 selection_mode="multiple",
                 alternate_row_colors=True,
+                sortable=True,
             )
-            table.set_rows([
-                ["Alice", "Engineering", 95000],
-                ["Bob", "Marketing", 72000],
-                ["Carol", "Engineering", 102000],
-                ["Dave", "Sales", 68000],
-                ["Eve", "Engineering", 98000],
-                ["Frank", "Marketing", 75000],
-                ["Grace", "Sales", 71000],
-                ["Heidi", "Engineering", 110000],
+            table.set_data([
+                {"NAME": "Alice", "DEPT": "Engineering", "SALARY": 95000},
+                {"NAME": "Bob",   "DEPT": "Marketing",   "SALARY": 72000},
+                {"NAME": "Carol", "DEPT": "Engineering", "SALARY": 102000},
+                {"NAME": "Dave",  "DEPT": "Sales",       "SALARY": 68000},
+                {"NAME": "Eve",   "DEPT": "Engineering", "SALARY": 98000},
+                {"NAME": "Frank", "DEPT": "Marketing",   "SALARY": 75000},
+                {"NAME": "Grace", "DEPT": "Sales",       "SALARY": 71000},
+                {"NAME": "Heidi", "DEPT": "Engineering", "SALARY": 110000},
             ])
             table.on("selected",
                      lambda items: lbl.set_text(
-                         f"Selected: {items[0]['values'][0]}"
+                         f"Selected: {items[0]['values'].get('NAME', '')}"
                          if len(items) == 1
                          else f"Selected: {len(items)} rows"))
             table.on("activated",
-                     lambda values: lbl.set_text(
-                         f"Activated: {values[0]}"))
+                     lambda values, path: lbl.set_text(
+                         f"Activated: {values.get('NAME', '')}"))
             hbox = W.HBox(spacing=4)
             btn_add = W.Button("Add Row")
             row_counter = [8]
             def on_add_row():
                 row_counter[0] += 1
-                table.append_row([f"Person {row_counter[0]}",
-                                  "New", 60000])
+                table.append_row({
+                    "NAME": f"Person {row_counter[0]}",
+                    "DEPT": "New", "SALARY": 60000,
+                })
             btn_add.on("activated", on_add_row)
             btn_sort = W.Button("Sort by Name")
-            btn_sort.on("activated", lambda: table.sort_by_column(0))
+            btn_sort.on("activated", lambda: table.sort_by_column("NAME"))
             hbox.add_widget(btn_add, 0)
             hbox.add_widget(btn_sort, 0)
             hbox.add_widget(lbl, 1)
@@ -598,40 +604,43 @@ def on_session(session):
             lbl = W.Label("")
             tree = W.TreeView(
                 columns=[
-                    "Name",
-                    "Type",
-                    {"label": "Size (KB)", "type": "number"},
+                    {"label": "Name", "key": "NAME", "type": "string"},
+                    {"label": "Type", "key": "TYPE", "type": "string"},
+                    {"label": "Size (KB)", "key": "SIZE",
+                     "type": "integer"},
                 ],
                 selection_mode="multiple",
                 alternate_row_colors=True,
+                sortable=True,
             )
-            tree.set_tree([
-                {"values": ["Documents", "Folder", ""], "children": [
-                    {"values": ["report.pdf", "PDF", 2400]},
-                    {"values": ["notes.txt", "Text", 12]},
-                    {"values": ["Presentations", "Folder", ""],
-                     "children": [
-                        {"values": ["slides.pptx", "PowerPoint", 5100]},
-                        {"values": ["demo.key", "Keynote", 8300]},
-                    ]},
-                ]},
-                {"values": ["Pictures", "Folder", ""], "children": [
-                    {"values": ["photo1.jpg", "JPEG", 3200]},
-                    {"values": ["photo2.png", "PNG", 1800]},
-                ]},
-                {"values": ["Music", "Folder", ""], "children": [
-                    {"values": ["song1.mp3", "MP3", 4500]},
-                    {"values": ["song2.flac", "FLAC", 32000]},
-                ]},
-            ])
+            tree.set_tree({
+                "Documents": {
+                    "report.pdf": {"TYPE": "PDF",  "SIZE": 2400},
+                    "notes.txt":  {"TYPE": "Text", "SIZE": 12},
+                    "Presentations": {
+                        "slides.pptx": {"TYPE": "PowerPoint",
+                                        "SIZE": 5100},
+                        "demo.key":    {"TYPE": "Keynote",
+                                        "SIZE": 8300},
+                    },
+                },
+                "Pictures": {
+                    "photo1.jpg": {"TYPE": "JPEG", "SIZE": 3200},
+                    "photo2.png": {"TYPE": "PNG",  "SIZE": 1800},
+                },
+                "Music": {
+                    "song1.mp3":  {"TYPE": "MP3",  "SIZE": 4500},
+                    "song2.flac": {"TYPE": "FLAC", "SIZE": 32000},
+                },
+            })
             tree.on("selected",
                     lambda items: lbl.set_text(
-                        f"Selected: {items[0]['values'][0]}"
+                        f"Selected: {items[0]['path']}"
                         if len(items) == 1
                         else f"Selected: {len(items)} items"))
             tree.on("activated",
-                    lambda values: lbl.set_text(
-                        f"Activated: {values[0]}"))
+                    lambda values, path: lbl.set_text(
+                        f"Activated: {path}"))
             hbox = W.HBox(spacing=4)
             btn_exp = W.Button("Expand All")
             btn_exp.on("activated", lambda: tree.expand_all())

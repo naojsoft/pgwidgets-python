@@ -466,45 +466,61 @@ async def main():
                 lbl = await W.Label("")
                 table = await W.TableView(
                     columns=[
-                        "Name",
-                        "Department",
-                        {"label": "Salary", "type": "number"},
+                        {"label": "Name",       "key": "NAME",
+                         "type": "string"},
+                        {"label": "Department", "key": "DEPT",
+                         "type": "string"},
+                        {"label": "Salary",     "key": "SALARY",
+                         "type": "integer"},
                     ],
                     selection_mode="multiple",
                     alternate_row_colors=True,
+                    sortable=True,
                 )
-                await table.set_rows([
-                    ["Alice", "Engineering", 95000],
-                    ["Bob", "Marketing", 72000],
-                    ["Carol", "Engineering", 102000],
-                    ["Dave", "Sales", 68000],
-                    ["Eve", "Engineering", 98000],
-                    ["Frank", "Marketing", 75000],
-                    ["Grace", "Sales", 71000],
-                    ["Heidi", "Engineering", 110000],
+                await table.set_data([
+                    {"NAME": "Alice", "DEPT": "Engineering",
+                     "SALARY": 95000},
+                    {"NAME": "Bob",   "DEPT": "Marketing",
+                     "SALARY": 72000},
+                    {"NAME": "Carol", "DEPT": "Engineering",
+                     "SALARY": 102000},
+                    {"NAME": "Dave",  "DEPT": "Sales",
+                     "SALARY": 68000},
+                    {"NAME": "Eve",   "DEPT": "Engineering",
+                     "SALARY": 98000},
+                    {"NAME": "Frank", "DEPT": "Marketing",
+                     "SALARY": 75000},
+                    {"NAME": "Grace", "DEPT": "Sales",
+                     "SALARY": 71000},
+                    {"NAME": "Heidi", "DEPT": "Engineering",
+                     "SALARY": 110000},
                 ])
                 async def on_table_sel(items):
                     if len(items) == 1:
                         await lbl.set_text(
-                            f"Selected: {items[0]['values'][0]}")
+                            f"Selected: "
+                            f"{items[0]['values'].get('NAME', '')}")
                     else:
                         await lbl.set_text(
                             f"Selected: {len(items)} rows")
                 await table.on("selected", on_table_sel)
-                async def on_table_act(values):
-                    await lbl.set_text(f"Activated: {values[0]}")
+                async def on_table_act(values, path):
+                    await lbl.set_text(
+                        f"Activated: {values.get('NAME', '')}")
                 await table.on("activated", on_table_act)
                 hbox = await W.HBox(spacing=4)
                 btn_add = await W.Button("Add Row")
                 row_counter = [8]
                 async def on_add_row():
                     row_counter[0] += 1
-                    await table.append_row(
-                        [f"Person {row_counter[0]}", "New", 60000])
+                    await table.append_row({
+                        "NAME": f"Person {row_counter[0]}",
+                        "DEPT": "New", "SALARY": 60000,
+                    })
                 await btn_add.on("activated", on_add_row)
                 btn_sort = await W.Button("Sort by Name")
                 async def on_sort():
-                    await table.sort_by_column(0)
+                    await table.sort_by_column("NAME")
                 await btn_sort.on("activated", on_sort)
                 await hbox.add_widget(btn_add, 0)
                 await hbox.add_widget(btn_sort, 0)
@@ -645,45 +661,47 @@ async def main():
                 lbl = await W.Label("")
                 tree = await W.TreeView(
                     columns=[
-                        "Name",
-                        "Type",
-                        {"label": "Size (KB)", "type": "number"},
+                        {"label": "Name", "key": "NAME",
+                         "type": "string"},
+                        {"label": "Type", "key": "TYPE",
+                         "type": "string"},
+                        {"label": "Size (KB)", "key": "SIZE",
+                         "type": "integer"},
                     ],
                     selection_mode="multiple",
                     alternate_row_colors=True,
+                    sortable=True,
                 )
-                await tree.set_tree([
-                    {"values": ["Documents", "Folder", ""],
-                     "children": [
-                        {"values": ["report.pdf", "PDF", 2400]},
-                        {"values": ["notes.txt", "Text", 12]},
-                        {"values": ["Presentations", "Folder", ""],
-                         "children": [
-                            {"values": ["slides.pptx", "PowerPoint",
-                                        5100]},
-                            {"values": ["demo.key", "Keynote", 8300]},
-                        ]},
-                    ]},
-                    {"values": ["Pictures", "Folder", ""],
-                     "children": [
-                        {"values": ["photo1.jpg", "JPEG", 3200]},
-                        {"values": ["photo2.png", "PNG", 1800]},
-                    ]},
-                    {"values": ["Music", "Folder", ""], "children": [
-                        {"values": ["song1.mp3", "MP3", 4500]},
-                        {"values": ["song2.flac", "FLAC", 32000]},
-                    ]},
-                ])
+                await tree.set_tree({
+                    "Documents": {
+                        "report.pdf": {"TYPE": "PDF",  "SIZE": 2400},
+                        "notes.txt":  {"TYPE": "Text", "SIZE": 12},
+                        "Presentations": {
+                            "slides.pptx": {"TYPE": "PowerPoint",
+                                            "SIZE": 5100},
+                            "demo.key":    {"TYPE": "Keynote",
+                                            "SIZE": 8300},
+                        },
+                    },
+                    "Pictures": {
+                        "photo1.jpg": {"TYPE": "JPEG", "SIZE": 3200},
+                        "photo2.png": {"TYPE": "PNG",  "SIZE": 1800},
+                    },
+                    "Music": {
+                        "song1.mp3":  {"TYPE": "MP3",  "SIZE": 4500},
+                        "song2.flac": {"TYPE": "FLAC", "SIZE": 32000},
+                    },
+                })
                 async def on_tree_sel(items):
                     if len(items) == 1:
                         await lbl.set_text(
-                            f"Selected: {items[0]['values'][0]}")
+                            f"Selected: {items[0]['path']}")
                     else:
                         await lbl.set_text(
                             f"Selected: {len(items)} items")
                 await tree.on("selected", on_tree_sel)
-                async def on_tree_act(values):
-                    await lbl.set_text(f"Activated: {values[0]}")
+                async def on_tree_act(values, path):
+                    await lbl.set_text(f"Activated: {path}")
                 await tree.on("activated", on_tree_act)
                 hbox = await W.HBox(spacing=4)
                 btn_exp = await W.Button("Expand All")
