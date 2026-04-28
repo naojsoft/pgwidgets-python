@@ -483,16 +483,25 @@ class Session:
     async def _send(self, msg):
         """Send a message to the primary browser and wait for the result.
         Secondary browsers receive a fire-and-forget copy.
-        Returns None if no browsers are connected."""
+        Returns None if no browsers are connected, or if the message
+        could not be JSON-serialised (the failure is logged and the
+        caller continues)."""
         if not self._connections:
             return None
         msg_id = self._next_id
         self._next_id += 1
         msg["id"] = msg_id
+        try:
+            payload = json.dumps(msg)
+        except Exception as e:
+            self._logger.error(
+                "JSON encode failed for %s.%s (wid=%s): %s",
+                msg.get("type"), msg.get("method"), msg.get("wid"), e,
+                exc_info=True)
+            return None
         loop = asyncio.get_event_loop()
         future = loop.create_future()
         self._pending[msg_id] = future
-        payload = json.dumps(msg)
         # Primary: wait for result
         await self._connections[0].send(payload)
         # Secondary: fire-and-forget with separate id
@@ -515,14 +524,20 @@ class Session:
             return
         msg_id = self._next_id
         self._next_id += 1
-        payload = json.dumps({
-            "type": "call",
-            "id": msg_id,
-            "wid": wid,
-            "method": method,
-            "args": list(args),
-            "silent": True,
-        })
+        try:
+            payload = json.dumps({
+                "type": "call",
+                "id": msg_id,
+                "wid": wid,
+                "method": method,
+                "args": list(args),
+                "silent": True,
+            })
+        except Exception as e:
+            self._logger.error(
+                "JSON encode failed for push %s (wid=%s): %s",
+                method, wid, e, exc_info=True)
+            return
         for ws in targets:
             _schedule_ws_send(ws, payload)
 

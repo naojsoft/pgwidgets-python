@@ -496,16 +496,25 @@ class Session:
         """Send a message to the primary browser and block until the
         result arrives.  Secondary browsers receive a fire-and-forget
         copy so they stay in sync without generating extra results.
-        Returns None if no browsers are connected."""
+        Returns None if no browsers are connected, or if the message
+        could not be JSON-serialised (the failure is logged and the
+        caller continues)."""
         if not self._connections:
             return None
         with self._lock:
             msg_id = self._next_id
             self._next_id += 1
         msg["id"] = msg_id
+        try:
+            payload = json.dumps(msg)
+        except Exception as e:
+            self._logger.error(
+                "JSON encode failed for %s.%s (wid=%s): %s",
+                msg.get("type"), msg.get("method"), msg.get("wid"), e,
+                exc_info=True)
+            return None
         event = threading.Event()
         self._events[msg_id] = event
-        payload = json.dumps(msg)
         # Primary: schedule the send; the response (and event signal)
         # come back via _handle_message, not via the send future.
         _schedule_ws_send(self._app._loop, self._connections[0], payload)
@@ -536,14 +545,20 @@ class Session:
         with self._lock:
             msg_id = self._next_id
             self._next_id += 1
-        payload = json.dumps({
-            "type": "call",
-            "id": msg_id,
-            "wid": wid,
-            "method": method,
-            "args": list(args),
-            "silent": True,
-        })
+        try:
+            payload = json.dumps({
+                "type": "call",
+                "id": msg_id,
+                "wid": wid,
+                "method": method,
+                "args": list(args),
+                "silent": True,
+            })
+        except Exception as e:
+            self._logger.error(
+                "JSON encode failed for push %s (wid=%s): %s",
+                method, wid, e, exc_info=True)
+            return
         for ws in targets:
             _schedule_ws_send(self._app._loop, ws, payload)
 
