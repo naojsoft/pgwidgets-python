@@ -26,49 +26,53 @@ def on_session(session):
 
     status = Widgets.Label("Select an item.")
 
-    # -- Tree example --
+    # -- Tree example --  (dict-tree format)
     tree = Widgets.TreeView(
         columns=[
-            "Name",
-            "Type",
-            {"label": "Size (KB)", "type": "number"},
+            {"label": "Name",      "key": "NAME", "type": "string"},
+            {"label": "Type",      "key": "TYPE", "type": "string"},
+            {"label": "Size (KB)", "key": "SIZE", "type": "integer"},
         ],
         selection_mode="multiple",
         alternate_row_colors=True,
+        sortable=True,
     )
 
-    tree.set_tree([
-        {"values": ["Documents", "Folder", ""], "children": [
-            {"values": ["report.pdf", "PDF", 2400]},
-            {"values": ["notes.txt", "Text", 12]},
-            {"values": ["Presentations", "Folder", ""], "children": [
-                {"values": ["slides.pptx", "PowerPoint", 5100]},
-                {"values": ["demo.key", "Keynote", 8300]},
-            ]},
-        ]},
-        {"values": ["Pictures", "Folder", ""], "children": [
-            {"values": ["photo1.jpg", "JPEG", 3200]},
-            {"values": ["photo2.png", "PNG", 1800]},
-            {"values": ["Vacation", "Folder", ""], "children": [
-                {"values": ["beach.jpg", "JPEG", 4100]},
-                {"values": ["sunset.jpg", "JPEG", 3900]},
-                {"values": ["mountains.jpg", "JPEG", 5200]},
-            ]},
-        ]},
-        {"values": ["Music", "Folder", ""], "children": [
-            {"values": ["song1.mp3", "MP3", 4500]},
-            {"values": ["song2.flac", "FLAC", 32000]},
-        ]},
-    ])
+    # Interior nodes use their dict key as their first-column label
+    # (no NAME field needed).  Leaves carry their own column data.
+    tree.set_tree({
+        "Documents": {
+            "report.pdf": {"TYPE": "PDF",  "SIZE": 2400},
+            "notes.txt":  {"TYPE": "Text", "SIZE": 12},
+            "Presentations": {
+                "slides.pptx": {"TYPE": "PowerPoint", "SIZE": 5100},
+                "demo.key":    {"TYPE": "Keynote",    "SIZE": 8300},
+            },
+        },
+        "Pictures": {
+            "photo1.jpg": {"TYPE": "JPEG", "SIZE": 3200},
+            "photo2.png": {"TYPE": "PNG",  "SIZE": 1800},
+            "Vacation": {
+                "beach.jpg":     {"TYPE": "JPEG", "SIZE": 4100},
+                "sunset.jpg":    {"TYPE": "JPEG", "SIZE": 3900},
+                "mountains.jpg": {"TYPE": "JPEG", "SIZE": 5200},
+            },
+        },
+        "Music": {
+            "song1.mp3":  {"TYPE": "MP3",  "SIZE": 4500},
+            "song2.flac": {"TYPE": "FLAC", "SIZE": 32000},
+        },
+    })
 
     def on_selected(items):
         if len(items) == 1:
-            status.set_text(f"Selected: {items[0]['values'][0]}")
+            status.set_text(f"Selected: {items[0]['path']}")
         else:
             status.set_text(f"Selected: {len(items)} items")
 
     tree.on("selected", on_selected)
-    tree.on("activated", lambda values: status.set_text(f"Activated: {values[0]}"))
+    tree.on("activated",
+            lambda values, path: status.set_text(f"Activated: {path}"))
 
     # -- Buttons --
     hbox = Widgets.HBox(spacing=4)
