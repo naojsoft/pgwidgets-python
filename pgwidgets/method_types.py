@@ -271,8 +271,8 @@ CLEAR_RESETS = {
     "TextArea": ["text"],
     "TextSource": ["text"],
     "ComboBox": ["text", "index", "_items"],
-    "TreeView": ["tree", "data", "columns", "_collapsed_paths", "_sort"],
-    "TableView": ["rows", "data", "columns", "_collapsed_paths", "_sort"],
+    "TreeView": ["tree", "data", "_collapsed_paths", "_sort"],
+    "TableView": ["rows", "data", "_collapsed_paths", "_sort"],
     "HtmlView": ["html"],
     "ExternalWidget": ["content"],
 }
