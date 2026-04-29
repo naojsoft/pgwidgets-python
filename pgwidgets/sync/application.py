@@ -509,8 +509,9 @@ class Session:
             payload = json.dumps(msg)
         except Exception as e:
             self._logger.error(
-                "JSON encode failed for %s.%s (wid=%s): %s",
-                msg.get("type"), msg.get("method"), msg.get("wid"), e,
+                f"JSON encode failed for "
+                f"{msg.get('type')}.{msg.get('method')} "
+                f"(wid={msg.get('wid')}): {e}",
                 exc_info=True)
             return None
         event = threading.Event()
@@ -556,8 +557,9 @@ class Session:
             })
         except Exception as e:
             self._logger.error(
-                "JSON encode failed for push %s (wid=%s): %s",
-                method, wid, e, exc_info=True)
+                f"JSON encode failed for push {method} "
+                f"(wid={wid}): {e}",
+                exc_info=True)
             return
         for ws in targets:
             _schedule_ws_send(self._app._loop, ws, payload)
