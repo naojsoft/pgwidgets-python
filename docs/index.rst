@@ -35,6 +35,7 @@ familiar Qt/GTK-style API.
    :caption: User Guide
 
    getting-started
+   WhatsNew
    architecture
    sync
    async
