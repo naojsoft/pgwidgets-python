@@ -371,6 +371,7 @@ CUSTOM_METHODS = {
     ("Menu", "get_menu"): _get_menu,
     ("MenuBar", "get_menu"): _get_menu,
     ("Dialog", "popup"): _dialog_popup,
+    ("ColorDialog", "popup"): _dialog_popup,
     ("MenuAction", "set_state"): _menuaction_set_state,
     ("MenuAction", "get_state"): _menuaction_get_state,
     ("Image", "set_binary_image"): _image_set_binary_image,
