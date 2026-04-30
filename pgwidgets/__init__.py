@@ -16,4 +16,17 @@ Usage (asynchronous):
     top = await W.TopLevel(title="Hello", resizable=True)
     ...
     await app.run()
+
+Version:
+    import pgwidgets
+    print(pgwidgets.__version__)
 """
+
+from importlib.metadata import version as _pkg_version, PackageNotFoundError
+
+try:
+    __version__ = _pkg_version("pgwidgets")
+except PackageNotFoundError:
+    # Package not installed (e.g. running from a source checkout
+    # without `pip install -e .`).  Fall back to a sentinel.
+    __version__ = "0.0.0+unknown"
