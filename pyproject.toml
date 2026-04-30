@@ -13,7 +13,11 @@ authors = [
     {name = "PGWidgets Developers"},
 ]
 dependencies = [
-    "pgwidgets-js",
+    # Tests and runtime expect set_min_size/set_max_size in
+    # WIDGET_METHODS, the dict-tree TreeView shape, the binary
+    # Image protocol, and the new TopLevel window-control options
+    # — all introduced in pgwidgets-js 0.2.0.
+    "pgwidgets-js>=0.2.0",
     "websockets>=12",
 ]
 keywords = ["widgets", "ui", "gui", "websocket", "browser"]
