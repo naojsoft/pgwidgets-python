@@ -178,6 +178,7 @@ WIDGET_CALLBACK_SYNC = {
     "ToolBarAction": {"activated": "state"},
     "TabWidget": {"page-switch": [(1, "index")]},
     "StackWidget": {"page-switch": [(1, "index")]},
+    "TopLevel": {"window-state": "window_state"},
 }
 
 # Container callbacks that manage the child list automatically.
