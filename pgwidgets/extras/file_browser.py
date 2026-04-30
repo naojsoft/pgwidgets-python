@@ -22,6 +22,7 @@ import stat
 import time
 
 from pgwidgets_js import get_static_path
+from pgwidgets.callbacks import Callbacks
 
 
 # ── Icon registry ──────────────────────────────────────────────
@@ -95,7 +96,7 @@ def _format_time(mtime):
     return time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))
 
 
-class FileBrowser:
+class FileBrowser(Callbacks):
     """A file browser dialog built from pgwidgets widgets.
 
     Parameters
@@ -114,6 +115,9 @@ class FileBrowser:
 
     def __init__(self, session, title="Browse", modal=True, autoclose=True,
                  mode="file"):
+        Callbacks.__init__(self)
+        self.enable_callback("activated")
+
         W = session.get_widgets()
         self._W = W
         self._mode = mode
@@ -124,7 +128,6 @@ class FileBrowser:
         self._show_hidden = False
         self._filters = {}      # category -> [ext, ...]
         self._active_filter = None  # None = all files
-        self._callbacks = []
         self._selected_names = []
 
         # Determine button labels
@@ -163,16 +166,17 @@ class FileBrowser:
         # so we explicitly downscale them for a comfortable row height.
         self._table = W.TableView(
             columns=[
-                {"label": "", "type": "icon", "icon_size": 14},
-                {"label": "Name", "type": "string"},
-                {"label": "Size", "type": "string"},
-                {"label": "Modified", "type": "string"},
+                {"label": "",         "key": "icon", "type": "icon",
+                 "icon_size": 14},
+                {"label": "Name",     "key": "name", "type": "string"},
+                {"label": "Size",     "key": "size", "type": "string"},
+                {"label": "Modified", "key": "modified", "type": "string"},
             ],
             selection_mode="multiple" if mode == "files" else "single",
             alternate_row_colors=True,
             sortable=True,
         )
-        self._table.set_column_width(0, 22)
+        self._table.set_column_width("icon", 22)
         self._table.on("activated", self._on_row_activated)
         self._table.on("selected", self._on_row_selected)
         self._dialog.add_widget(self._table, 1)
@@ -245,15 +249,12 @@ class FileBrowser:
         self._populate()
         self._dialog.popup(x, y)
 
-    def on(self, action, callback):
-        """Register a callback.
-
-        The ``'activated'`` callback is fired with the selected path
-        (a string) for single-selection modes, or a list of paths for
-        ``mode='files'``.
-        """
-        if action == "activated":
-            self._callbacks.append(callback)
+    # Callback registration (`add_callback`, `on`, `make_callback`,
+    # `enable_callback`, etc.) is inherited from Callbacks.
+    #
+    # The ``'activated'`` callback fires with the selected path (a
+    # string) for single-selection modes, or a list of paths for
+    # ``mode='files'``.
 
     # ── Internal ────────────────────────────────────────────────
 
@@ -302,7 +303,8 @@ class FileBrowser:
         # Parent directory entry
         parent = os.path.dirname(self._directory)
         if parent != self._directory:  # not at root
-            rows.append([ICONS["parent"], "..", "", ""])
+            rows.append({"icon": ICONS["parent"], "name": "..",
+                         "size": "", "modified": ""})
 
         for name, is_dir, size, mtime in entries:
             if not is_dir and allowed is not None:
@@ -312,10 +314,11 @@ class FileBrowser:
             icon = _icon_for_name(name, is_dir)
             size_str = "" if is_dir else _format_size(size)
             time_str = _format_time(mtime)
-            rows.append([icon, name, size_str, time_str])
+            rows.append({"icon": icon, "name": name,
+                         "size": size_str, "modified": time_str})
 
         self._table.set_rows(rows)
-        self._table.set_column_width(0, 22)
+        self._table.set_column_width("icon", 22)
 
         # Pre-select filename if set
         if self._filename:
@@ -349,9 +352,9 @@ class FileBrowser:
                 self._navigate_to(d)
                 self._name_entry.set_text(os.path.basename(path))
 
-    def _on_row_activated(self, values):
+    def _on_row_activated(self, values, path):
         """Double-click on a row."""
-        name = values[1]  # column 1 is the name
+        name = values.get("name", "")
         if name == "..":
             self._go_up()
             return
@@ -455,16 +458,15 @@ class FileBrowser:
         """Hide the dialog and fire callbacks."""
         if self._autoclose:
             self._dialog.hide()
-        for cb in self._callbacks:
-            cb(result)
+        self.make_callback("activated", result)
 
     def _on_row_selected(self, items):
         """Selection changed in the table."""
         if not items:
             self._selected_names = []
             return
-        names = [it["values"][1] for it in items
-                 if it["values"][1] != ".."]
+        names = [it["values"].get("name", "") for it in items
+                 if it["values"].get("name") != ".."]
         self._selected_names = names
 
         if self._mode == "files":
