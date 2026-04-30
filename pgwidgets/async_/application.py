@@ -513,7 +513,15 @@ class Session:
             ff_payload = json.dumps(msg_copy)
             for ws in self._connections[1:]:
                 _schedule_ws_send(ws, ff_payload)
-        return await future
+        result = await future
+        # Sync Python's _next_wid past any auto-allocated ids the
+        # browser used for sub-widgets during widget construction.
+        if (msg.get("type") == "create" and result is not None
+                and result.get("type") == "result"):
+            js_next = result.get("next_wid")
+            if js_next is not None and self._next_wid < js_next:
+                self._next_wid = js_next
+        return result
 
 
     def _push(self, wid, method, *args):

@@ -58,15 +58,46 @@ def _drain_send_exception(fut):
 
 
 def _schedule_ws_send(loop, ws, payload):
-    """Fire-and-forget ws.send() with exception drain."""
-    fut = asyncio.run_coroutine_threadsafe(ws.send(payload), loop)
+    """Fire-and-forget ws.send() with exception drain.
+
+    Returns True if the coroutine was successfully scheduled on the
+    loop, False if the loop refused it (closed loop, recursion
+    limit, etc).  Callers that block on a response should check the
+    return value and not wait if scheduling failed.
+    """
+    coro = ws.send(payload)
+    try:
+        fut = asyncio.run_coroutine_threadsafe(coro, loop)
+    except Exception as e:
+        # Could be RuntimeError (loop closed), RecursionError (caller
+        # stack too deep), MemoryError, etc.  Close the orphan
+        # coroutine cleanly to avoid a RuntimeWarning.
+        coro.close()
+        print(f"[SCHED_SEND] loop refused coroutine: {e!r} "
+              f"loop_closed={loop.is_closed()} "
+              f"loop_running={loop.is_running()} "
+              f"payload_size={len(payload)}",
+              flush=True)
+        return False
     fut.add_done_callback(_drain_send_exception)
+    return True
 
 
 def _schedule_ws_close(loop, ws):
-    """Fire-and-forget ws.close() with exception drain."""
-    fut = asyncio.run_coroutine_threadsafe(ws.close(), loop)
+    """Fire-and-forget ws.close() with exception drain.  Returns
+    True/False analogous to _schedule_ws_send."""
+    coro = ws.close()
+    try:
+        fut = asyncio.run_coroutine_threadsafe(coro, loop)
+    except Exception as e:
+        coro.close()
+        print(f"[SCHED_CLOSE] loop refused coroutine: {e!r} "
+              f"loop_closed={loop.is_closed()} "
+              f"loop_running={loop.is_running()}",
+              flush=True)
+        return False
     fut.add_done_callback(_drain_send_exception)
+    return True
 
 
 def _run_queue_loop(cb_queue, stop_event, logger=None):
@@ -343,6 +374,10 @@ class Session:
 
     def _dispatch_callback(self, wid, action, *args):
         """Dispatch a callback through the configured concurrency mode."""
+        # widget = self._widget_map.get(wid)
+        # cls_name = widget._js_class if widget is not None else "<missing>"
+        # print(f"[PY-CB] receive wid={wid} action={action} "
+        #       f"registered_class={cls_name}", flush=True)
         if self._reconstructing:
             return  # suppress callbacks during reconstruction
         # Auto-sync: some callbacks carry state that should be reflected
@@ -518,7 +553,12 @@ class Session:
         self._events[msg_id] = event
         # Primary: schedule the send; the response (and event signal)
         # come back via _handle_message, not via the send future.
-        _schedule_ws_send(self._app._loop, self._connections[0], payload)
+        if not _schedule_ws_send(self._app._loop,
+                                 self._connections[0], payload):
+            # Schedule failed (e.g. RecursionError / closed loop).
+            # No response will ever arrive — abort instead of hanging.
+            self._events.pop(msg_id, None)
+            return None
         # Secondary: fire-and-forget with a separate id (no event)
         if len(self._connections) > 1:
             with self._lock:
@@ -531,6 +571,17 @@ class Session:
         event.wait()
         result = self._results.pop(msg_id)
         del self._events[msg_id]
+        # Sync Python's _next_wid past any auto-allocated ids the
+        # browser used for sub-widgets during widget construction.
+        # Otherwise Python's next allocation could collide with one
+        # of those auto-assigned wids.
+        if (msg.get("type") == "create" and result is not None
+                and result.get("type") == "result"):
+            js_next = result.get("next_wid")
+            if js_next is not None:
+                with self._lock:
+                    if self._next_wid < js_next:
+                        self._next_wid = js_next
         if result.get("type") == "error":
             raise RuntimeError(result["error"])
         return result
@@ -580,6 +631,7 @@ class Session:
         """
         wid = self._alloc_wid()
         resolved = [self._resolve_arg(a) for a in args]
+        # print(f"[PY-CREATE] wid={wid} class={js_class}", flush=True)
         self._send({
             "type": "create",
             "wid": wid,
@@ -633,8 +685,15 @@ class Session:
             await ws.send(header)
             await ws.send(data)
         for ws in self._connections:
-            fut = asyncio.run_coroutine_threadsafe(_pair(ws),
-                                                   self._app._loop)
+            coro = _pair(ws)
+            try:
+                fut = asyncio.run_coroutine_threadsafe(coro,
+                                                       self._app._loop)
+            except RuntimeError as e:
+                print(f"[SCHED_BINARY] loop refused coroutine: {e!r}",
+                      flush=True)
+                coro.close()
+                continue
             fut.add_done_callback(_drain_send_exception)
 
     def _listen(self, wid, action, handler):
@@ -1421,6 +1480,12 @@ class Application:
         Call this after construction and any customisation.  Subclasses
         can override to add extra setup before or after the servers start.
         """
+        # Promote all warnings to exceptions while debugging.  This
+        # surfaces things like "coroutine was never awaited" with a
+        # full traceback at the point of creation, which avoids
+        # logger-level recursion that can mask the real cause.
+        # import warnings
+        # warnings.filterwarnings('error')
         self._shutdown = threading.Event()
         self._loop = asyncio.new_event_loop()
         if self._max_sessions is not None:
