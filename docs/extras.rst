@@ -148,6 +148,70 @@ Methods
      - Register a callback for ``action="activated"``.  Fires when
        the user confirms a valid selection.  Callback signature
        depends on mode (see :ref:`fb-modes`).
+   * - ``add_callback(action, callback)``
+     - Inherited from :class:`pgwidgets.callbacks.Callbacks`.  Same
+       as ``on`` but the handler also receives the ``FileBrowser``
+       instance as its first argument.
+
+FileBrowser inherits from :class:`pgwidgets.callbacks.Callbacks`, so
+it has the full callback-registration API
+(``add_callback``/``on``/``remove_callback``/``clear_callback``/
+``has_callback``).  See :ref:`callbacks-base` below.
+
+.. _callbacks-base:
+
+Callbacks base class
+--------------------
+
+``pgwidgets.callbacks.Callbacks`` is a tiny base class that gives
+Python-side composite/utility classes the same callback API as a
+real ``Widget``, without making them widgets.  Use it whenever you
+build a Python-side helper that needs to expose handler registration
+to user code (the way ``FileBrowser`` does).
+
+.. code-block:: python
+
+   from pgwidgets.callbacks import Callbacks
+
+   class MyTool(Callbacks):
+       def __init__(self):
+           super().__init__()
+           self.enable_callback("done")
+
+       def do_work(self):
+           ...
+           self.make_callback("done", result)
+
+   tool = MyTool()
+   tool.add_callback("done", lambda obj, result: ...)   # widget-arg style
+   tool.on("done", lambda result: ...)                  # plain style
+
+API:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 65
+
+   * - Method
+     - Description
+   * - ``enable_callback(action)``
+     - Declare ``action`` as a valid callback name.
+   * - ``has_callback(action)``
+     - True if the action has been enabled.
+   * - ``add_callback(action, handler, *args, **kwargs)``
+     - Register a handler.  Invoked as
+       ``handler(self, *cb_args, *args, **kwargs)``.
+   * - ``on(action, handler, *args, **kwargs)``
+     - Register a handler without the source-object first arg.
+       Invoked as ``handler(*cb_args, *args, **kwargs)``.
+   * - ``remove_callback(action, handler)``
+     - Unregister all entries for *action* whose handler is
+       *handler*.
+   * - ``clear_callback(action)``
+     - Remove every handler for *action*.
+   * - ``make_callback(action, *args)``
+     - Invoke every registered handler.  Exceptions from one handler
+       are logged and don't prevent the rest from running.
 
 Icons
 ~~~~~

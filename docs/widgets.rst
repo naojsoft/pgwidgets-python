@@ -53,6 +53,11 @@ All widgets (except Timer and FileDialog) have these methods:
      - Set font properties. Pass ``None`` to keep defaults.
    * - ``set_focus()``
      - Give focus to this widget.
+   * - ``set_allow_text_selection(tf)``
+     - Allow or disallow browser text-select (drag-to-highlight)
+       inside this widget.  Off by default for most widgets.  Form
+       controls (``TextEntry``, ``TextArea``, etc.) and the
+       ``treeview`` cell editor always allow selection regardless.
    * - ``set_cursor(name)``
      - Set the mouse cursor.
    * - ``add_cursor(name, url, hotspot_x, hotspot_y, size)``
@@ -210,6 +215,14 @@ Multiple-document interface container.
   ``index_of(child)``, ``index_to_widget(index)``
 - **Callbacks:** ``child-added``, ``child-removed``, ``page-switch``, ``page-close``, ``scrolled``
 
+``add_widget(child, options)`` accepts an options dict with keys
+``title``, ``width``, ``height``, ``icon_url``, ``x``, ``y``, and
+``shadeable`` (default ``True``).  When ``shadeable`` is true the
+sub-window's right-click context menu offers Shade/Unshade and
+double-clicking the title bar toggles it.  The active (topmost)
+sub-window's title bar is drawn slightly lighter, like the active
+tab in a TabWidget.
+
 Windows
 -------
 
@@ -218,17 +231,44 @@ TopLevel
 
 A floating window (the primary container for an application).
 
-- **Options:** ``resizable``, ``title``, ``moveable``, ``closeable``
+- **Options:** ``resizable``, ``title``, ``icon``, ``moveable``,
+  ``closeable``, ``minimizable``, ``maximizable``, ``lowerable``,
+  ``shadeable``
 - **Methods:** ``set_widget(child)``, ``set_title(title)``,
-  ``set_position(x, y)``, ``set_moveable(tf)``
-- **Callbacks:** ``move``, ``close``
+  ``set_icon(url)``, ``set_position(x, y)``, ``set_moveable(tf)``,
+  ``raise_()``, ``lower()``, ``toggle_minimize()``,
+  ``toggle_maximize()``, ``toggle_shade()``,
+  ``set_window_state(state)``, ``get_window_state()``
+- **Callbacks:** ``move``, ``close``, ``window-state`` -- fires with
+  the new state name on minimize / maximize / shade transitions.
 
 .. code-block:: python
 
-   top = Widgets.TopLevel(title="My App", resizable=True)
+   top = Widgets.TopLevel(title="My App", resizable=True,
+                          icon="/icons/app.svg",
+                          minimizable=True, maximizable=True,
+                          lowerable=True, shadeable=True)
    top.resize(800, 600)
    top.set_widget(vbox)
    top.show()
+
+Window controls
+^^^^^^^^^^^^^^^
+
+Title-bar buttons appear only for the options enabled at construction
+(``minimizable``, ``maximizable``, ``lowerable``).  ``shadeable``
+defaults to ``True`` and exposes a Shade/Unshade entry in the
+right-click context menu (and on double-click).  The four window
+states are ``'normal'``, ``'shaded'`` (rolled up to the title bar
+in place), ``'minimized'`` (auto-stacked along the bottom of the
+viewport), and ``'maximized'`` (fills the browser viewport).
+
+Right-click on the title bar opens a context menu with the
+applicable actions (Raise, Lower, Shade, Minimize, Maximize, Close).
+The menu supports both click-release and press-drag-release styles.
+
+State (minimized / maximized / shaded) is tracked as widget state
+and survives a browser reconnect.
 
 Page
 ~~~~
@@ -274,11 +314,15 @@ stretch factors, just like ``VBox``.
 ColorDialog
 ~~~~~~~~~~~
 
-Color picker dialog.
+Color picker dialog.  Inherits the standard Dialog show/move/popup
+behavior.
 
 - **Options:** ``color``, ``title``, ``modal``, ``moveable``
-- **Methods:** ``get_color()``, ``set_color(hex_string)``
-- **Callbacks:** ``activated``, ``pick``
+- **Methods:** ``get_color()``, ``set_color(hex_string)``,
+  ``popup(x, y)``, ``set_position(x, y)``, ``set_modal(tf)``
+- **Callbacks:** ``activated`` (fires with the chosen colour when OK
+  is clicked), ``pick`` (fires interactively as the user drags
+  inside the picker), ``move``, ``close``
 
 Buttons and Controls
 --------------------
@@ -487,12 +531,25 @@ Image
 Displays an image. Can be interactive for drawing and input events.
 
 - **Options:** ``url``, ``interactive``, ``use_animation_frame``
-- **Methods:** ``set_image(url)``, ``get_draw_context()``, ``update()``
+- **Methods:** ``set_image(url)``, ``set_binary_image(data, format='jpeg')``,
+  ``get_draw_context()``, ``update()``
 - **Callbacks:** ``pointer-down``, ``pointer-up``, ``pointer-move``,
   ``enter``, ``leave``, ``click``, ``dblclick``, ``scroll``,
   ``key-down``, ``key-up``, ``key-press``, ``focus-in``, ``focus-out``,
   ``drop-start``, ``drop-end``, ``drag-over``, ``drop-progress``,
   ``contextmenu``
+
+``set_binary_image(data, format)``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Set the image from raw bytes (``bytes``, ``bytearray``, or
+``memoryview``).  Sends the data over the WebSocket as a binary
+frame paired with a JSON header, avoiding the ~33% base64 overhead
+of ``set_image``.  Useful for animation/streaming where many frames
+are pushed per second.  ``format`` is one of ``'jpeg'``, ``'png'``,
+``'webp'``, or ``'gif'`` (used to set the MIME type for the browser).
+The latest frame is also stored in widget state so it is replayed
+on reconnect.
 
 Canvas
 ~~~~~~
@@ -509,51 +566,169 @@ TreeView
 Hierarchical tree/list display.
 
 - **Options:** ``columns``, ``show_header``, ``selection_mode``,
-  ``alternate_row_colors``, ``show_grid``, ``show_row_numbers``
-- **Methods:** ``set_columns(columns)``, ``set_tree(data)``,
-  ``set_data(data)``, ``add_item(parent, values)``,
-  ``remove_item(node)``, ``update_tree(items)``,
-  ``remove_items(paths)``, ``clear()``, ``expand_all()``,
-  ``collapse_all()``, ``get_expanded()``, ``get_collapsed()``,
-  ``expand_item(node)``, ``collapse_item(node)``, ``get_selected()``,
-  ``set_selected(items)``, ``select_path(path, state)``,
-  ``select_paths(paths, state)``, ``select_all(state)``,
-  ``set_column_width(col_index, width)``,
+  ``alternate_row_colors``, ``show_grid``, ``show_row_numbers``,
+  ``sortable``, ``allow_text_selection``
+- **Methods:** ``set_columns(columns)``, ``set_tree(tree)``,
+  ``add_tree(tree, parent=None)``, ``update_tree(tree)``,
+  ``set_data(data)``, ``add_item(parent, key, values)``,
+  ``remove_item(path)``, ``remove_items(paths)``, ``clear()``,
+  ``expand_all()``, ``collapse_all()``, ``get_expanded()``,
+  ``get_collapsed()``, ``expand_item(path)``, ``collapse_item(path)``,
+  ``get_selected()``, ``get_subtree(status='all')``,
+  ``set_selected(paths)``, ``clear_selection()``,
+  ``select_path(path, state)``, ``select_paths(paths, state)``,
+  ``select_all(state)``,
+  ``set_column_width(col_key, width)``,
   ``set_optimal_column_widths()``,
-  ``sort_by_column(col_index, ascending)``, ``scroll_to_path(path)``,
+  ``sort_by_column(col_key, ascending)``, ``scroll_to_path(path)``,
   ``scroll_to_end()``, ``get_column_count()``, ``get_row_count()``,
   ``set_show_grid(tf)``, ``set_show_row_numbers(tf)``,
-  ``set_column_editable(col_index, tf)``,
-  ``set_cell(row, col_index, value)``,
-  ``insert_column(index, column)``, ``append_column(column)``,
-  ``delete_column(index)``, ``insert_row(index, values)``,
-  ``append_row(values)``, ``delete_row(index)``
+  ``set_column_editable(col_key, tf)``,
+  ``set_cell(path, col_key, value)``,
+  ``insert_column(column, before=None)``, ``append_column(column)``,
+  ``delete_column(col_key)``,
+  ``insert_row(values, key=None, before=None)``,
+  ``append_row(values)``, ``delete_row(path_or_key)``
 - **Callbacks:** ``activated``, ``selected``, ``expanded``, ``collapsed``,
-  ``cell_edited``
+  ``cell_edited``, ``sorted``, ``scrolled``
+
+Column descriptors
+^^^^^^^^^^^^^^^^^^
+
+Each column is described by a dict with the following keys:
+
+- ``label`` -- header text.
+- ``key`` -- a stable string identifier for the column.  All
+  per-column methods take a key (not an index).  If omitted, an
+  auto key like ``_col0`` is generated.
+- ``type`` -- one of ``'string'`` (alias ``'str'``), ``'integer'``
+  (alias ``'int'``), ``'float'`` (alias ``'number'``), ``'boolean'``
+  (renders ✓ when truthy), or ``'icon'`` (cell value is a URL or
+  ``data:`` URL used as the image source).
+- ``halign`` -- ``'left'``, ``'center'``, or ``'right'``.  Default
+  depends on type: numeric → right, boolean / icon → center,
+  otherwise left.
+- ``editable`` -- whether cells in the column can be edited via
+  double-click.
+- ``icon_size`` -- pixel size for icon columns (default 16).
+
+Tree shape (``set_tree``)
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The tree is a dict, keyed by stable string identifiers.  Detection
+rules in each subdict:
+
+- All values primitive → it's a **leaf**, and the dict IS the row's
+  column-key → value mapping.
+- Any value is a nested dict → it's an **interior** node and its
+  entries are children, keyed by their dict key.  Primitive entries
+  in a mixed dict become the interior's own column values
+  automatically.
+- An explicit ``__values__`` sentinel separates the interior's own
+  column values from its children when needed.
+- An empty dict ``{}`` is treated as an empty interior (a folder
+  with no contents).
+
+The first column auto-displays the node's dict key when the row
+supplies no value for it, so most interiors need no ``__values__``
+at all.  Paths to nodes are arrays of those keys, and they remain
+valid no matter how the visible tree is sorted.
+
+.. code-block:: python
+
+   tree = W.TreeView(
+       columns=[
+           {"label": "Name", "key": "NAME", "type": "string"},
+           {"label": "Type", "key": "TYPE", "type": "string"},
+           {"label": "Size", "key": "SIZE", "type": "integer"},
+       ],
+       sortable=True,
+   )
+   tree.set_tree({
+       "Documents": {
+           "report.pdf": {"TYPE": "PDF",  "SIZE": 2400},
+           "notes.txt":  {"TYPE": "Text", "SIZE": 12},
+       },
+       "Pictures": {
+           "__values__": {"TYPE": "Folder"},     # own column data
+           "photo.jpg": {"TYPE": "JPEG", "SIZE": 3200},
+       },
+   })
+
+   tree.on("activated",
+           lambda values, path: print("opened:", path, values))
+   tree.on("selected",
+           lambda items: print("selection:", [it["path"] for it in items]))
+
+Auto-spanning
+^^^^^^^^^^^^^
+
+Within a row, a column whose key is missing (not present in the
+``values`` dict, or set to ``null``/``None``) is "absent" and the
+preceding present cell extends across it via CSS grid spans.
+Explicit empty strings render as their own cell.  This lets parent
+rows be terse: ``{"NAME": "Documents"}`` (with the rest of the
+columns absent) renders as a single cell across the row.
+
+``add_tree`` and ``update_tree``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- ``add_tree(tree, parent=None)`` merges a dict-tree under the
+  given parent path.  Existing keys are replaced subtree-deep;
+  new keys are appended.  Selections whose paths still resolve
+  in the new tree stay selected; removed paths are silently
+  dropped.
+- ``update_tree(tree)`` replaces the whole tree (currently a thin
+  wrapper around ``set_tree`` plus the same selection-preservation
+  logic).
+
+``get_subtree(status='all')``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Returns a dict-tree (round-trippable through ``set_tree``)
+containing a subset of the tree.  ``status`` is one of:
+
+- ``'all'`` -- the whole tree.
+- ``'selected'`` -- selected nodes, plus all their descendants and
+  the ancestors needed to keep the result connected.
+- ``'expanded'`` -- expanded interior nodes, plus descendants /
+  ancestors as above.
+- ``'collapsed'`` -- collapsed interior nodes, ditto.
 
 TableView
 ~~~~~~~~~
 
-Flat table display. Same column/selection interface as TreeView but without
-tree hierarchy.
+Flat table display.  Subclass of TreeView with table-style defaults
+(header on, grid lines on, flat rows).  Same column descriptors and
+key-based methods as TreeView.
 
 - **Options:** ``columns``, ``show_header``, ``selection_mode``,
-  ``alternate_row_colors``, ``show_grid``, ``show_row_numbers``
-- **Methods:** ``set_columns(columns)``, ``set_rows(rows)``,
-  ``set_data(data)``, ``clear()``, ``get_selected()``,
-  ``set_selected(items)``, ``select_path(path, state)``,
-  ``select_paths(paths, state)``, ``select_all(state)``,
-  ``set_column_width(col_index, width)``,
-  ``set_optimal_column_widths()``,
-  ``sort_by_column(col_index, ascending)``, ``scroll_to_path(path)``,
-  ``scroll_to_end()``, ``get_column_count()``, ``get_row_count()``,
-  ``set_show_grid(tf)``, ``set_show_row_numbers(tf)``,
-  ``set_column_editable(col_index, tf)``,
-  ``set_cell(row, col_index, value)``,
-  ``insert_column(index, column)``, ``append_column(column)``,
-  ``delete_column(index)``, ``insert_row(index, values)``,
-  ``append_row(values)``, ``delete_row(index)``
-- **Callbacks:** ``activated``, ``selected``, ``cell_edited``
+  ``alternate_row_colors``, ``show_grid``, ``show_row_numbers``,
+  ``sortable``, ``allow_text_selection``
+- **Methods:** ``set_columns(columns)``, ``set_rows(rows)``
+  (alias for ``set_data``), all the TreeView per-column / per-row
+  methods using column keys and key paths.
+- **Callbacks:** ``activated``, ``selected``, ``cell_edited``,
+  ``sorted``, ``scrolled``
+
+``set_data`` accepts either a list of dicts (preferred) or a list of
+positional arrays:
+
+.. code-block:: python
+
+   table = W.TableView(columns=[
+       {"label": "Name", "key": "NAME", "type": "string"},
+       {"label": "Department", "key": "DEPT", "type": "string"},
+       {"label": "Salary", "key": "SALARY", "type": "integer"},
+   ], sortable=True)
+
+   table.set_data([
+       {"NAME": "Alice", "DEPT": "Engineering", "SALARY": 95000},
+       {"NAME": "Bob",   "DEPT": "Marketing",   "SALARY": 72000},
+   ])
+   table.append_row({"NAME": "Carol", "DEPT": "Sales",
+                     "SALARY": 71000})
+   table.sort_by_column("SALARY", ascending=False)
 
 Non-Visual
 ----------
@@ -607,7 +782,10 @@ MenuAction
 - **Options:** ``text``, ``icon_url``, ``iconsize``, ``checkable``, ``name``
 - **Methods:** ``set_text(text)``, ``get_text()``, ``set_icon(url, iconsize)``,
   ``set_checked(checked)``, ``get_checked()``
-- **Callbacks:** ``activated``
+- **Callbacks:** ``activated`` -- handler signature is
+  ``handler(widget)`` for non-checkable actions and
+  ``handler(widget, checked)`` for checkable ones (the boolean is
+  the new checked state).
 
 ToolBar
 ~~~~~~~
