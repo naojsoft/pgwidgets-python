@@ -842,14 +842,19 @@ def __init__({_init_params(pos_names, opt_names)}):
 
 
 def _init_params(pos_names, opt_names):
-    """Build the parameter string for the generated __init__."""
+    """Build the parameter string for the generated __init__.
+
+    Options are exposed as positional-or-keyword (no ``*`` separator)
+    so that single-option widgets like Frame accept ``Frame("Title")``
+    in addition to ``Frame(title="Title")``, matching the pyodide
+    bridge's behavior.  Each option still defaults to ``None`` so
+    omitted ones don't override state from prior calls.
+    """
     params = ["self", "session"]
     for name in pos_names:
         params.append(f"{name}=None")
-    if opt_names:
-        params.append("*")
-        for name in opt_names:
-            params.append(f"{name}=None")
+    for name in opt_names:
+        params.append(f"{name}=None")
     params.append("**kwargs")
     return ", ".join(params)
 
