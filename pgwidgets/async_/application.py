@@ -23,6 +23,7 @@ from pathlib import Path
 import websockets
 
 from pgwidgets_js import get_static_path, get_remote_html
+from pgwidgets._json import JsonEncoder
 from pgwidgets.defs import WIDGETS
 from pgwidgets.method_types import (
     SPECIAL_SETTERS, FIXED_SETTERS, CHILD_METHODS as CHILD_METHOD_NAMES,
@@ -492,7 +493,7 @@ class Session:
         self._next_id += 1
         msg["id"] = msg_id
         try:
-            payload = json.dumps(msg)
+            payload = json.dumps(msg, cls=JsonEncoder)
         except Exception as e:
             self._logger.error(
                 f"JSON encode failed for "
@@ -510,7 +511,7 @@ class Session:
             ff_id = self._next_id
             self._next_id += 1
             msg_copy = dict(msg, id=ff_id)
-            ff_payload = json.dumps(msg_copy)
+            ff_payload = json.dumps(msg_copy, cls=JsonEncoder)
             for ws in self._connections[1:]:
                 _schedule_ws_send(ws, ff_payload)
         result = await future
@@ -541,7 +542,7 @@ class Session:
                 "method": method,
                 "args": list(args),
                 "silent": True,
-            })
+            }, cls=JsonEncoder)
         except Exception as e:
             self._logger.error(
                 f"JSON encode failed for push {method} "
@@ -567,7 +568,7 @@ class Session:
             "id": msg_id,
             "wid": wid,
             "action": action,
-        })
+        }, cls=JsonEncoder)
         for ws in self._connections:
             _schedule_ws_send(ws, payload)
 
@@ -630,7 +631,7 @@ class Session:
             "wid": wid,
             "method": method,
             "args": list(args),
-        })
+        }, cls=JsonEncoder)
         async def _pair(ws):
             await ws.send(header)
             await ws.send(data)
@@ -1332,7 +1333,8 @@ class Application:
     async def _ws_handler(self, ws):
         # Init handshake: send init, receive ack which may contain
         # session_id + token for reconnection.
-        await ws.send(json.dumps({"type": "init", "id": 0}))
+        await ws.send(json.dumps({"type": "init", "id": 0},
+                                 cls=JsonEncoder))
         ack_data = await ws.recv()
         ack = json.loads(ack_data)
         reconnect_sid = ack.get("session_id")
@@ -1399,7 +1401,7 @@ class Application:
             "type": "session-info",
             "session_id": session.id,
             "token": session.token,
-        }))
+        }, cls=JsonEncoder))
 
         if is_reconnect:
             async def do_reconstruct():

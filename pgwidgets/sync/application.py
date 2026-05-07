@@ -25,6 +25,7 @@ from pathlib import Path
 import websockets
 
 from pgwidgets_js import get_static_path, get_remote_html
+from pgwidgets._json import JsonEncoder
 from pgwidgets.defs import WIDGETS
 from pgwidgets.sync.widget import Widget, build_all_widget_classes
 from pgwidgets.method_types import (
@@ -259,6 +260,15 @@ class Session:
             # (e.g. app.close() called from within a callback).
             if threading.current_thread() is not self._cb_thread:
                 self._cb_thread.join(timeout=2)
+
+    def get_session_thread(self):
+        mode = self._app._concurrency
+        if mode == "serialized":
+            return threading.get_ident()
+        elif mode == "per_session":
+            return self._cb_thread
+        else:
+            return None
 
     # -- Message handling --
 
@@ -541,7 +551,7 @@ class Session:
             self._next_id += 1
         msg["id"] = msg_id
         try:
-            payload = json.dumps(msg)
+            payload = json.dumps(msg, cls=JsonEncoder)
         except Exception as e:
             self._logger.error(
                 f"JSON encode failed for "
@@ -565,7 +575,7 @@ class Session:
                 ff_id = self._next_id
                 self._next_id += 1
             msg_copy = dict(msg, id=ff_id)
-            ff_payload = json.dumps(msg_copy)
+            ff_payload = json.dumps(msg_copy, cls=JsonEncoder)
             for ws in self._connections[1:]:
                 _schedule_ws_send(self._app._loop, ws, ff_payload)
         event.wait()
@@ -605,7 +615,7 @@ class Session:
                 "method": method,
                 "args": list(args),
                 "silent": True,
-            })
+            }, cls=JsonEncoder)
         except Exception as e:
             self._logger.error(
                 f"JSON encode failed for push {method} "
@@ -677,7 +687,7 @@ class Session:
             "wid": wid,
             "method": method,
             "args": list(args),
-        })
+        }, cls=JsonEncoder)
         # Send header + binary as an atomic pair on each connection so
         # they can't be interleaved with other sends from another
         # thread.  The pair is wrapped in a single coroutine.
@@ -1512,7 +1522,8 @@ class Application:
     async def _ws_handler(self, ws):
         # Init handshake: send init, receive ack which may contain
         # session_id + token for reconnection.
-        await ws.send(json.dumps({"type": "init", "id": 0}))
+        await ws.send(json.dumps({"type": "init", "id": 0},
+                                 cls=JsonEncoder))
         ack_data = await ws.recv()
         ack = json.loads(ack_data)
         reconnect_sid = ack.get("session_id")
@@ -1582,7 +1593,7 @@ class Application:
             "type": "session-info",
             "session_id": session.id,
             "token": session.token,
-        }))
+        }, cls=JsonEncoder))
 
         if is_reconnect:
             # Dispatch reconstruction to the session thread — calling
