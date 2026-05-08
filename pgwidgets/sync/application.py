@@ -806,7 +806,18 @@ class Session:
             self._widget_map[wid] = widget
             # Auto-listen for state-syncing callbacks (move, resize)
             # so position/size changes are tracked for reconstruction.
+            # Gated by the widget's defn callbacks list so we don't
+            # send "listen move" to a TextBufferRef or Timer — any
+            # non-visual Callback subclass that has no such events.
+            defn = WIDGETS.get(cls_name, {}) if cls_name else {}
+            opt_names_set = set(defn.get("options", []))
+            all_callbacks = defn.get("callbacks", [])
             for action in STATE_SYNC_CALLBACKS:
+                req_opt = STATE_SYNC_REQUIRES_OPTION.get(action)
+                if req_opt and req_opt not in opt_names_set:
+                    continue
+                if req_opt is None and action not in all_callbacks:
+                    continue
                 key = f"{wid}:{action}"
                 if key not in self._callbacks:
                     self._listen(wid, action, lambda wid, *a: None)

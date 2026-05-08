@@ -739,8 +739,18 @@ class Session:
             # so position/size changes are tracked for reconstruction.
             # Register locally (sync) and send the listen message as
             # true fire-and-forget (no result awaited) since
-            # _resolve_return is not async.
+            # _resolve_return is not async.  Gated by the widget's
+            # defn callbacks list so non-visual Callback subclasses
+            # (Timer, TextBufferRef, …) don't get spurious listeners.
+            defn = WIDGETS.get(cls_name, {}) if cls_name else {}
+            opt_names_set = set(defn.get("options", []))
+            all_callbacks = defn.get("callbacks", [])
             for action in STATE_SYNC_CALLBACKS:
+                req_opt = STATE_SYNC_REQUIRES_OPTION.get(action)
+                if req_opt and req_opt not in opt_names_set:
+                    continue
+                if req_opt is None and action not in all_callbacks:
+                    continue
                 key = f"{wid}:{action}"
                 if key not in self._callbacks:
                     self._callbacks[key] = [lambda wid, *a: None]
