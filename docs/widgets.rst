@@ -426,24 +426,41 @@ TextSource
 
 Source code editor with line numbers, syntax tags, and gutter icons.
 
+Positions in the buffer are expressed as ``TextBufferRef`` instances —
+live references that track edits.  ``create_ref(offset, gravity)`` is
+the only place a caller deals in raw integer offsets; all other
+position-taking and position-returning methods on the public API use
+refs.
+
+.. note::
+
+   Refs are JS-side live objects.  When using ``TextSource`` over the
+   remote interface (pgwidgets-python proper), refs cannot currently
+   round-trip across the wire — a ref-handle protocol is planned for
+   a future release.  In the meantime, the ref-based API is fully
+   usable from JS-direct and pyodide contexts.
+
 - **Args:** ``text``
 - **Options:** ``wrap``, ``line_numbers``, ``icon_gutter``, ``editable``,
   ``font_family``, ``font_size``
 - **Methods:** ``set_text(text)``, ``get_text()``, ``get_length()``,
-  ``insert_text(offset, text, tags)``, ``delete_range(start, end)``,
+  ``insert_text(ref, text, tags)``, ``delete_range(start_ref, end_ref)``,
   ``clear()``, ``set_editable(tf)``, ``set_wrap(mode)``,
   ``set_line_numbers(tf)``, ``set_icon_gutter(tf)``,
-  ``set_icon(line, icon_url)``, ``get_cursor()``, ``set_cursor(offset)``,
-  ``get_selection()``, ``set_selection(start, end)``,
+  ``set_icon(ref, icon_url)``, ``get_cursor()``, ``set_cursor(ref)``,
+  ``get_selection_range()``, ``set_selection_range(start_ref, end_ref)``,
   ``create_tag(name, attrs)``, ``remove_tag_def(name)``,
-  ``apply_tag(name, start, end)``, ``remove_tag(name, start, end)``,
-  ``get_tags_at(offset)``, ``create_ref(offset, gravity)``,
-  ``remove_ref(ref)``, ``undo()``, ``redo()``, ``can_undo()``,
-  ``can_redo()``, ``find(query, opts)``, ``find_all(query, opts)``,
-  ``replace(query, replacement, opts)``, ``scroll_to(ref_or_offset)``,
+  ``apply_tag(name, start_ref, end_ref)``,
+  ``remove_tag(name, start_ref, end_ref)``,
+  ``get_tags_at(ref)``, ``get_tags_range(start_ref, end_ref)``,
+  ``create_ref(offset, gravity)``, ``remove_ref(ref)``,
+  ``undo()``, ``redo()``, ``can_undo()``, ``can_redo()``,
+  ``find(query, opts)``, ``find_all(query, opts)``,
+  ``replace(query, replacement, opts)``, ``scroll_to_ref(ref)``,
   ``scroll_to_cursor()``
-- **Callbacks:** ``changed``, ``cursor_moved``, ``line_clicked``,
-  ``icon_clicked``
+- **Callbacks:** ``changed``, ``cursor_moved`` (fires with a fresh
+  ref), ``line_clicked``, ``icon_clicked`` (fires with
+  ``(line, ref)``)
 
 Selectors
 ---------
