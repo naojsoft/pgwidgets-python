@@ -462,6 +462,17 @@ refs.
   ref), ``line_clicked``, ``icon_clicked`` (fires with
   ``(line, ref)``)
 
+A ``TextBufferRef`` itself supports the following methods:
+
+- **Inspection:** ``get_offset()``, ``get_gravity()``, ``is_valid()``,
+  ``get_line()``, ``get_line_column()``
+- **Absolute position:** ``set_offset(offset)``, ``set_line(lineno)``,
+  ``to_ref(other)``, ``copy()``
+- **Relative movement:** ``to_line_start()``, ``to_line_end()``,
+  ``to_next_line()``, ``to_prev_line()``, ``to_next_char()``,
+  ``to_prev_char()`` (movement methods clamp at buffer boundaries
+  and are no-ops past them; mutating an invalidated ref raises)
+
 Selectors
 ---------
 
