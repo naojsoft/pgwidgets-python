@@ -160,3 +160,7 @@ Other notable changes
   though the JS side preserves columns on clear).
 - ``FileBrowser`` migrated to the new dict-tree ``TableView`` API
   internally and now subclasses ``Callbacks``.
+- ``FixedLayout`` container added (auto-generated from the JS
+  definition).  Use ``W.FixedLayout()`` and
+  ``layout.add_widget(child, x, y)`` to place children at fixed
+  pixel offsets; ``remove(child)`` works as on any other container.

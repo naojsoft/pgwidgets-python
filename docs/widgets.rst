@@ -140,6 +140,17 @@ Grid layout.
   ``append_column(widgets)``, ``delete_column(index)``
 - **Callbacks:** ``child-added``, ``child-removed``
 
+FixedLayout
+~~~~~~~~~~~
+
+Absolute-positioning container.  Each child is placed at a fixed
+``(x, y)`` pixel offset within the container and renders at its
+natural size unless ``resize()`` has been called on it.
+
+- **Options:** *(none)*
+- **Methods:** ``add_widget(child, x, y)``
+- **Callbacks:** ``child-added``, ``child-removed``
+
 Splitter
 ~~~~~~~~
 
