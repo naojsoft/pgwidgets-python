@@ -384,12 +384,15 @@ class Session:
 
     def _dispatch_callback(self, wid, action, *args):
         """Dispatch a callback through the configured concurrency mode."""
-        # widget = self._widget_map.get(wid)
-        # cls_name = widget._js_class if widget is not None else "<missing>"
-        # print(f"[PY-CB] receive wid={wid} action={action} "
-        #       f"registered_class={cls_name}", flush=True)
-        if self._reconstructing:
-            return  # suppress callbacks during reconstruction
+        # Suppress callbacks during reconstruction — they are side
+        # effects of state replay, not user actions.  Exception: 'map'
+        # is a one-shot lifecycle event that fires when a widget first
+        # gains a visible layout box; the JS-side observers may fire
+        # it during the reconstruction window and we MUST forward it
+        # or the user's map handler never runs until something later
+        # triggers a re-fire (e.g. a window resize).
+        if self._reconstructing and action != 'map':
+            return
         # Auto-sync: some callbacks carry state that should be reflected
         # in the Python-side widget (e.g. move -> position, resize -> size).
         state_key = STATE_SYNC_CALLBACKS.get(action)

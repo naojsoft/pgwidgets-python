@@ -300,8 +300,15 @@ class Session:
 
     def _dispatch_callback(self, wid, action, *args):
         """Dispatch a callback through the configured concurrency mode."""
-        if self._reconstructing:
-            return  # suppress callbacks during reconstruction
+        # Suppress callbacks during reconstruction — they are side
+        # effects of state replay, not user actions.  Exception: 'map'
+        # is a one-shot lifecycle event that the JS-side observers fire
+        # when a widget first gains a visible layout box; the timing
+        # can land inside the reconstruction window, and dropping it
+        # means the user's map handler never runs until a later layout
+        # change (e.g. window resize) triggers a re-fire.
+        if self._reconstructing and action != 'map':
+            return
 
         # Auto-sync: some callbacks carry state that should be reflected
         # in the Python-side widget (e.g. move -> position, resize -> size).
