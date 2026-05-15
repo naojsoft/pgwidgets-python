@@ -395,10 +395,19 @@ class Session:
             return
         # Auto-sync: some callbacks carry state that should be reflected
         # in the Python-side widget (e.g. move -> position, resize -> size).
+        # Only sync for widgets that opted into auto-sync (via the
+        # resizable / similar option).  Otherwise a user who subscribes
+        # to 'resize' purely to regenerate content (e.g. an animation
+        # Image whose handler redraws on size change) would have the
+        # layout-determined size silently captured as user-set state,
+        # which then replays on reconstruction as a literal
+        # resize(W, H) — pinning the widget to pixel dimensions and
+        # killing flex growth.
         state_key = STATE_SYNC_CALLBACKS.get(action)
         if state_key is not None:
             widget = self._widget_map.get(wid)
-            if widget is not None:
+            if widget is not None \
+                    and action in widget._auto_sync_actions:
                 # Normalize: resize sends {width, height} dict, move
                 # sends (x, y) as separate args.  Store as a flat tuple
                 # matching the corresponding setter's signature.
