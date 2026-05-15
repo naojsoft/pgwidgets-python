@@ -79,6 +79,16 @@ class Widget:
         self._constructor_options = {}
         self._registered_callbacks = {}
         self._auto_sync_actions = set()
+        # Actions we listen to passively for getter support
+        # (e.g. 'resize' on every visual widget so get_size() returns
+        # a current value), but that aren't in _auto_sync_actions and
+        # therefore don't push to peers or replay on reconstruction.
+        self._passive_sync_actions = set()
+        # State keys the user explicitly set via a setter call.
+        # Used during reconstruction to decide whether a state key
+        # should be replayed: passively-captured callback state
+        # (e.g. layout-determined size) is NOT in this set.
+        self._user_set_state = set()
         self._replay_calls = []
         self._add_seq = 0
 
@@ -196,6 +206,8 @@ class Widget:
         obj._constructor_options = {}
         obj._registered_callbacks = {}
         obj._auto_sync_actions = set()
+        obj._passive_sync_actions = set()
+        obj._user_set_state = set()
         obj._replay_calls = []
         obj._stale = False
         return obj
@@ -212,15 +224,31 @@ class Widget:
         opt_names_set = set(defn.get("options", []))
         all_callbacks = defn.get("callbacks", [])
 
-        # State-sync callbacks (move -> position, resize -> size)
+        # State-sync callbacks (move -> position, resize -> size).
+        # For visual widgets we always *listen* so getters like
+        # get_size() / get_position() can return current values.
+        # But we only add the action to _auto_sync_actions — which
+        # controls push-to-peers and replay-on-reconstruction — when
+        # the widget actually opted in (e.g. via the 'resizable' option
+        # or by declaring the callback in its defn).  This keeps
+        # layout-determined sizes from being replayed as literal
+        # resize() calls that would pin flex/expanding widgets.
+        is_visual = defn.get("base") != "callback"
         for action in STATE_SYNC_CALLBACKS:
             req_opt = STATE_SYNC_REQUIRES_OPTION.get(action)
-            if req_opt and req_opt not in opt_names_set:
+            opted_in = False
+            if req_opt is not None:
+                opted_in = req_opt in opt_names_set
+            else:
+                opted_in = action in all_callbacks
+            if not is_visual:
                 continue
-            if req_opt is None and action not in all_callbacks:
-                continue
-            await session._listen(wid, action, lambda wid, *a: None)
-            self._auto_sync_actions.add(action)
+            if action == "resize" or opted_in:
+                await session._listen(wid, action, lambda wid, *a: None)
+            if opted_in:
+                self._auto_sync_actions.add(action)
+            elif action == "resize":
+                self._passive_sync_actions.add(action)
 
         # Per-widget-class state sync (e.g. Slider "activated" -> value)
         cls_sync = WIDGET_CALLBACK_SYNC.get(js_class, {})
@@ -461,6 +489,9 @@ def _make_setter(method_name, param_names, state_key):
             self._state[state_key] = args[0]
         else:
             self._state[state_key] = args
+        # Mark as user-set so reconstruction knows to replay this key
+        # (callback-captured values for the same key don't get marked).
+        self._user_set_state.add(state_key)
         return await self._call(method_name, *args)
     method.__name__ = method_name
     method.__qualname__ = f"Widget.{method_name}"
@@ -473,6 +504,7 @@ def _make_fixed_setter(method_name, state_key, fixed_value):
     """Create a no-arg async method that sets a fixed state value (show/hide)."""
     async def method(self):
         self._state[state_key] = fixed_value
+        self._user_set_state.add(state_key)
         return await self._call(method_name)
     method.__name__ = method_name
     method.__qualname__ = f"Widget.{method_name}"

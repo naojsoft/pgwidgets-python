@@ -91,6 +91,13 @@ class Session:
     _STATE_KEY_TO_SETTER = {v: k for k, v in SPECIAL_SETTERS.items()}
     # e.g. {"size": "resize"}
 
+    # Reverse map: state_key -> callback action that auto-syncs it
+    # (e.g. "size" -> "resize", "position" -> "move").  Used during
+    # state replay to skip keys that weren't actively opted into via
+    # _auto_sync_actions — those were captured passively for getter
+    # support but must not be replayed (would pin layout).
+    _STATE_KEY_TO_SYNC_ACTION = {v: k for k, v in STATE_SYNC_CALLBACKS.items()}
+
     # State keys handled by fixed-value methods (show/hide)
     _FIXED_STATE_KEYS = {}
     for _mname, (_key, _val) in FIXED_SETTERS.items():
@@ -312,34 +319,34 @@ class Session:
 
         # Auto-sync: some callbacks carry state that should be reflected
         # in the Python-side widget (e.g. move -> position, resize -> size).
-        # Only sync for widgets that opted into auto-sync (via the
-        # resizable / similar option).  Otherwise a user who subscribes
-        # to 'resize' purely to regenerate content (e.g. an animation
-        # Image whose handler redraws on size change) would have the
-        # layout-determined size silently captured as user-set state,
-        # which then replays on reconstruction as a literal
+        # We always *capture* the value so get_size()/get_position() return
+        # current values, but only *push* it to other browsers (and replay
+        # it on reconstruction) when the widget opted in via auto-sync.
+        # Otherwise a layout-determined size would replay as a literal
         # resize(W, H) — pinning the widget to pixel dimensions and
         # killing flex growth.
         state_key = STATE_SYNC_CALLBACKS.get(action)
         if state_key is not None:
             widget = self._widget_map.get(wid)
-            if widget is not None \
-                    and action in widget._auto_sync_actions:
+            if widget is not None:
+                auto = action in widget._auto_sync_actions
                 if len(args) == 1 and isinstance(args[0], dict):
                     d = args[0]
                     if "width" in d and "height" in d:
                         new_val = (d["width"], d["height"])
                         if widget._state.get(state_key) != new_val:
                             widget._state[state_key] = new_val
-                            self._push(wid, "resize",
-                                       d["width"], d["height"])
+                            if auto:
+                                self._push(wid, "resize",
+                                           d["width"], d["height"])
                 else:
                     new_val = tuple(args)
                     if widget._state.get(state_key) != new_val:
                         widget._state[state_key] = new_val
-                        setter = (self._STATE_KEY_TO_SETTER.get(state_key)
-                                  or f"set_{state_key}")
-                        self._push(wid, setter, *args)
+                        if auto:
+                            setter = (self._STATE_KEY_TO_SETTER.get(state_key)
+                                      or f"set_{state_key}")
+                            self._push(wid, setter, *args)
                 # If this widget wraps a child (e.g. MDISubWindow),
                 # propagate geometry into the parent's children options
                 # so reconstruction replays with the current pos/size.
@@ -751,27 +758,37 @@ class Session:
             cls = self._widget_classes.get(cls_name, Widget) if cls_name else Widget
             widget = cls._from_existing(self, wid, cls_name or "Widget")
             self._widget_map[wid] = widget
-            # Auto-listen for state-syncing callbacks (move, resize)
-            # so position/size changes are tracked for reconstruction.
+            # Auto-listen for state-syncing callbacks (move, resize).
             # Register locally (sync) and send the listen message as
             # true fire-and-forget (no result awaited) since
-            # _resolve_return is not async.  Gated by the widget's
-            # defn callbacks list so non-visual Callback subclasses
-            # (Timer, TextBufferRef, …) don't get spurious listeners.
+            # _resolve_return is not async.  For visual widgets we
+            # always listen for 'resize' so get_size() can return a
+            # current value, but we only mark the action as
+            # auto-syncing (which triggers push-to-peers and
+            # replay-on-reconstruction) when the widget defn opts in.
+            # Non-visual Callback-base objects (Timer, TextBufferRef,
+            # …) get nothing.
             defn = WIDGETS.get(cls_name, {}) if cls_name else {}
             opt_names_set = set(defn.get("options", []))
             all_callbacks = defn.get("callbacks", [])
+            is_visual = defn.get("base") != "callback"
             for action in STATE_SYNC_CALLBACKS:
                 req_opt = STATE_SYNC_REQUIRES_OPTION.get(action)
-                if req_opt and req_opt not in opt_names_set:
+                if req_opt is not None:
+                    opted_in = req_opt in opt_names_set
+                else:
+                    opted_in = action in all_callbacks
+                if not is_visual:
                     continue
-                if req_opt is None and action not in all_callbacks:
-                    continue
-                key = f"{wid}:{action}"
-                if key not in self._callbacks:
-                    self._callbacks[key] = [lambda wid, *a: None]
-                    self._fire_and_forget_listen(wid, action)
-                widget._auto_sync_actions.add(action)
+                if action == "resize" or opted_in:
+                    key = f"{wid}:{action}"
+                    if key not in self._callbacks:
+                        self._callbacks[key] = [lambda wid, *a: None]
+                        self._fire_and_forget_listen(wid, action)
+                if opted_in:
+                    widget._auto_sync_actions.add(action)
+                elif action == "resize":
+                    widget._passive_sync_actions.add(action)
             return widget
         if isinstance(val, list):
             return [self._resolve_return(v) for v in val]
@@ -1029,6 +1046,20 @@ class Session:
             if key.startswith("_"):
                 continue
 
+            # Skip auto-sync state (size, position) that came in
+            # passively via a callback (e.g. layout-determined size).
+            # We capture those so getters like get_size()/
+            # get_position() work, but replaying them would pin the
+            # widget to pixel dimensions and override flex/expanding
+            # layout.  Replay only if the user explicitly set the
+            # value, or if the widget opted into the sync action
+            # (e.g. an interactively-resizable widget).
+            sync_action = self._STATE_KEY_TO_SYNC_ACTION.get(key)
+            if (sync_action is not None
+                    and key not in widget._user_set_state
+                    and sync_action not in widget._auto_sync_actions):
+                continue
+
             # Binary-payload state (e.g. set_binary_image) replays via
             # _send_binary so the bytes go in a raw frame, not embedded
             # as base64 in JSON.
@@ -1073,9 +1104,12 @@ class Session:
         # _listen calls treat them as first-time registrations and
         # actually send the "listen" message to the browser.
         wid = widget._wid
+        passive = getattr(widget, "_passive_sync_actions", set())
         for action in list(saved_cbs.keys()):
             self._callbacks.pop(f"{wid}:{action}", None)
         for action in widget._auto_sync_actions:
+            self._callbacks.pop(f"{wid}:{action}", None)
+        for action in passive:
             self._callbacks.pop(f"{wid}:{action}", None)
 
         for action, entries in saved_cbs.items():
@@ -1091,6 +1125,13 @@ class Session:
         # user-registered callbacks above)
         for action in widget._auto_sync_actions:
             if action not in widget._registered_callbacks:
+                await self._listen(widget._wid, action,
+                                   lambda wid, *a: None)
+        # Passive listeners (e.g. 'resize' for getter support on
+        # widgets that didn't opt into auto-sync).
+        for action in passive:
+            if (action not in widget._registered_callbacks
+                    and action not in widget._auto_sync_actions):
                 await self._listen(widget._wid, action,
                                    lambda wid, *a: None)
 
