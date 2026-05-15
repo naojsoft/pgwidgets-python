@@ -991,11 +991,22 @@ class Session:
                 self._listen(new_widget._wid, act,
                              lambda wid, *a: None)
                 new_widget._auto_sync_actions.add(act)
-        # Replay any state the proxy accumulated (e.g. set_tooltip)
+        # Replay any state the proxy accumulated (e.g. set_tooltip).
+        # Skip passively-captured auto-sync state (size, position): we
+        # capture those from callbacks so getters work, but replaying
+        # would pin the widget to layout-determined pixel dimensions
+        # (same logic as _reconstruct_widget).
+        user_set = getattr(old_widget, "_user_set_state", set())
+        auto = getattr(old_widget, "_auto_sync_actions", set())
         for key, value in old_widget._state.items():
             if key.startswith("_"):
                 continue
             if key in sync_keys:
+                continue
+            sync_action = self._STATE_KEY_TO_SYNC_ACTION.get(key)
+            if (sync_action is not None
+                    and key not in user_set
+                    and sync_action not in auto):
                 continue
             method_name = (self._STATE_KEY_TO_SETTER.get(key)
                            or f"set_{key}")
@@ -1004,6 +1015,13 @@ class Session:
             else:
                 self._call(new_widget._wid, method_name, value)
             new_widget._state[key] = value
+            # Propagate user-set / auto-sync membership to the new
+            # widget so subsequent reconstructions replay consistently.
+            if sync_action is not None:
+                if key in user_set:
+                    new_widget._user_set_state.add(key)
+                if sync_action in auto:
+                    new_widget._auto_sync_actions.add(sync_action)
 
     def _ensure_reconstructed(self, widget):
         """Ensure a widget has been created on the JS side.
