@@ -235,6 +235,10 @@ STATE_DEFAULTS = {
     "TabWidget": {"index": -1},
     "StackWidget": {"index": -1},
     "MDIWidget": {"index": -1},
+    # ScrollBar uses 1-arg set_scroll_percent / set_thumb_percent,
+    # so a scalar default is correct (not the (0.0, 0.0) tuple used
+    # by the 2-arg scroll widgets in STATE_KEY_DEFAULTS).
+    "ScrollBar": {"scroll_percent": 0.0, "thumb_percent": 0.0},
 }
 
 # Cross-widget default values for state keys, used as a fallback when
@@ -245,6 +249,17 @@ STATE_KEY_DEFAULTS = {
     "size": (0, 0),
     "position": (0, 0),
     "index": -1,
+    # Scroll widgets that take (h_pct, v_pct).  ScrollBar overrides
+    # these in STATE_DEFAULTS with scalar 0.0.
+    "scroll_position": (0.0, 0.0),
+    "scroll_percent": (0.0, 0.0),
+    "thumb_percent": (0.0, 0.0),
+    # set_expanding(horizontal, vertical) → tuple of bools
+    "expanding": (False, False),
+    "enabled": True,
+    "state": False,
+    # HTMLMediaElement convention: 0.0 (muted) to 1.0 (full).
+    "volume": 1.0,
 }
 
 # Widgets with incrementally-built item lists.
