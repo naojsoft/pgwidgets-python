@@ -1,13 +1,76 @@
 What's New
 ==========
 
-Significant changes since the last tagged release (``v0.1.3``).
+Recent changes — since ``v0.2.1``
+---------------------------------
+
+Reliable ``get_size()`` / ``get_position()`` on every visual widget
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The auto-sync layer that backs widget getters has been reworked so
+``widget.get_size()`` (and ``get_position()`` where supported)
+returns the current layout-determined value for any visual widget,
+not just ones that opted into the ``resizable`` / ``moveable``
+options.  The binding now installs a *passive* resize listener on
+every visual widget — the value is captured into local state for
+the getter, but it is **not** pushed to other connected browsers or
+replayed on reconstruction.  Explicit ``widget.resize(w, h)`` calls
+are still replayed, as is interactive resize on widgets that opted
+into active sync.
+
+The user-visible upshot: code that calls ``image.get_size()`` on an
+``Image`` placed in a flex container now returns the real pixel
+size the browser laid the widget out at, instead of ``None`` or a
+stale value.  And widgets like ``Image`` with
+``set_expanding(True, True)`` no longer get pinned to pixel
+dimensions on reconnect (a regression in earlier auto-sync work).
+
+The same guard now applies in both reconstruction paths
+(top-level state replay AND ``_transfer_proxy`` for factory-created
+widgets like ``ToolBarAction``), which fixes a "toolbar items
+drift farther apart after each reconnect" bug.
+
+``map`` callback survives reconstruction
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The Python side now forwards ``map`` callbacks during a reconstruct
+window instead of suppressing them along with the rest of the
+state-replay echoes.  ``map`` is a one-shot lifecycle event tied to
+the widget first becoming visually present; missing it on the
+Python side meant a user's map handler stayed un-fired until the
+window happened to be resized.  Pairs with the JS-side reliability
+work for the same callback.
+
+Sensible defaults for more getters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Getters now return useful zero-value defaults before any state has
+been set or reported from the browser, instead of ``None``:
+
+- ``get_scroll_position()`` → ``(0.0, 0.0)``
+- ``get_scroll_percent()`` → ``(0.0, 0.0)`` (or ``0.0`` on
+  ``ScrollBar``, which uses a single-axis API)
+- ``get_thumb_percent()`` → ``(0.0, 0.0)`` (or ``0.0`` on
+  ``ScrollBar``)
+- ``get_expanding()`` → ``(False, False)``
+- ``get_enabled()`` → ``True``
+- ``get_state()`` → ``False``
+- ``get_volume()`` → ``1.0`` (HTMLMediaElement convention: 0.0
+  muted, 1.0 full).
+
+Configured in ``STATE_KEY_DEFAULTS`` / ``STATE_DEFAULTS`` in
+``method_types.py``.
+
+----
+
+Earlier — since ``v0.1.3``
+--------------------------
 
 Major changes
--------------
+~~~~~~~~~~~~~
 
 TreeView / TableView: dict-tree model
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Mirroring the JS-side rewrite, ``TreeView`` and ``TableView`` now
 work with hierarchies of dicts keyed by stable string identifiers.
@@ -63,7 +126,7 @@ Highlights:
 See :doc:`widgets` for the full reference.
 
 Window controls (TopLevel) and shade (MDISubWindow)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 ``TopLevel`` gains the same window controls that ``MDISubWindow``
 has, plus a "shade" (roll up to title bar) state on both.
@@ -96,7 +159,7 @@ Maximize, Close).  The menu supports both click-release and
 press-drag-release, like a menubar.
 
 Image: binary-frame protocol
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 New method ``Image.set_binary_image(data, format='jpeg')`` sends raw
 bytes (``bytes`` / ``bytearray`` / ``memoryview``) via a WebSocket
@@ -106,7 +169,7 @@ Useful for animation/streaming.  ``format`` is one of ``"jpeg"``,
 widget state and replayed on reconnect.
 
 Callbacks base class
-~~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^^
 
 New module ``pgwidgets.callbacks`` exposes ``Callbacks``, a small
 base class that provides the same callback API (``add_callback``,
@@ -121,7 +184,7 @@ supports both ``add_callback("activated", ...)`` and
 See :ref:`callbacks-base`.
 
 Robustness improvements
------------------------
+~~~~~~~~~~~~~~~~~~~~~~~
 
 - ``Session._send`` and ``_send_binary`` no longer hang when the
   asyncio loop refuses a coroutine (loop closed mid-call,
@@ -139,7 +202,7 @@ Robustness improvements
   internal ``ScrollBar`` widgets in its constructor.
 
 Other notable changes
----------------------
+~~~~~~~~~~~~~~~~~~~~~
 
 - ``ColorDialog`` now exposes ``popup``, ``set_position``,
   ``set_modal``, and the ``move`` / ``close`` callbacks (inherited
