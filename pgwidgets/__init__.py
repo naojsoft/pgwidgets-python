@@ -24,6 +24,8 @@ Version:
 
 from importlib.metadata import version as _pkg_version, PackageNotFoundError
 
+from pgwidgets.buffer import Buffer, is_buffer  # noqa: F401
+
 try:
     __version__ = _pkg_version("pgwidgets")
 except PackageNotFoundError:

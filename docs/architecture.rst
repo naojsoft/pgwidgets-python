@@ -68,7 +68,9 @@ All messages are JSON objects with a ``type`` field.
 - ``{"type": "error", "id": 1, "error": "..."}`` -- method error.
 - ``{"type": "callback", "wid": 1, "action": "activated", "args": [...]}`` --
   user interaction.
-- ``{"type": "file-chunk", ...}`` -- chunked file data (see :doc:`callbacks`).
+- ``{"type": "binary-chunk", ...}`` -- one chunk of a chunked binary
+  transfer (used in both directions; file uploads, large image
+  payloads, etc.; see :doc:`callbacks`).
 
 Session Model
 -------------

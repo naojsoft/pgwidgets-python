@@ -30,7 +30,7 @@ from pgwidgets.method_types import (
     STATE_SYNC_CALLBACKS, STATE_SYNC_REQUIRES_OPTION,
     WIDGET_CALLBACK_SYNC, POST_CHILDREN_STATE_KEYS, ITEM_LIST_CONFIG,
     CHILD_CLOSE_CALLBACKS, REPLAY_METHODS, TREE_VIEW_WIDGETS,
-    BINARY_STATE_KEYS,
+    BINARY_STATE_KEYS, _send_binary_auto,
 )
 from pgwidgets.async_.widget import Widget, build_all_widget_classes
 
@@ -125,6 +125,9 @@ class Session:
 
         self._widget_classes = app._widget_classes
         self._transfers = {}     # transfer_id -> transfer state dict
+        # FIFO of binary-chunk JSON headers (encoding="binary") still
+        # awaiting their paired raw binary frame.
+        self._pending_binary_headers = []
         self._callback_source_ws = None  # ws that sent current callback
 
         self._reconstructing = False  # suppress callbacks during reconstruction
@@ -194,6 +197,19 @@ class Session:
     # -- Message handling --
 
     def _handle_message(self, data):
+        # Raw binary frames pair with the head of the binary-chunk
+        # JSON header FIFO (encoding="binary").  See the sync
+        # equivalent for the rationale.
+        if isinstance(data, (bytes, bytearray, memoryview)):
+            queue = self._pending_binary_headers
+            if not queue:
+                self._logger.warning(
+                    "Session %s: unexpected binary frame with no "
+                    "queued header (ignored).", self.id)
+                return
+            header = queue.pop(0)
+            self._handle_binary_chunk(header, bytes(data))
+            return
         msg = json.loads(data)
         if isinstance(msg, list):
             for m in msg:
@@ -216,8 +232,18 @@ class Session:
         elif msg_type == "viewport":
             self._screen_size = (msg.get("width", 0), msg.get("height", 0))
 
-        elif msg_type == "file-chunk":
-            self._handle_file_chunk(msg)
+        elif msg_type == "binary-chunk":
+            encoding = msg.get("encoding", "binary")
+            if encoding == "binary":
+                self._pending_binary_headers.append(msg)
+            elif encoding == "base64":
+                import base64 as _b64
+                payload = _b64.b64decode(msg.get("data") or "")
+                self._handle_binary_chunk(msg, payload)
+            else:
+                self._logger.warning(
+                    "Session %s: unknown binary-chunk encoding %r "
+                    "(ignored).", self.id, encoding)
 
         elif msg_type == "callback":
             # If the payload has a transfer_id, stash the metadata —
@@ -244,25 +270,40 @@ class Session:
             self._dispatch_callback(
                 msg["wid"], msg["action"], *msg.get("args", []))
 
-    def _handle_file_chunk(self, msg):
-        """Handle a file-chunk message: buffer data and fire callbacks."""
-        tid = msg["transfer_id"]
+    def _handle_binary_chunk(self, header, data):
+        """Buffer one chunk of an in-flight transfer.
+
+        ``header`` is the parsed binary-chunk JSON; ``data`` is the
+        chunk's raw bytes (paired binary frame, or decoded inline
+        base64).  See the sync equivalent for the full description.
+        """
+        tid = header["transfer_id"]
         transfer = self._transfers.get(tid)
         if transfer is None:
             return
 
-        fi = msg["file_index"]
-        fc = msg["file_count"]
+        fi = header.get("file_index", 0)
+        fc = header.get("file_count", 1)
+        ci = header["chunk_index"]
+        nc = header["num_chunks"]
         if fi not in transfer["file_data"]:
-            transfer["file_data"][fi] = []
-            transfer["num_chunks"][fi] = msg["num_chunks"]
-        transfer["file_data"][fi].append(msg["data"])
+            transfer["file_data"][fi] = [None] * nc
+            transfer["num_chunks"][fi] = nc
+        slot = transfer["file_data"][fi]
+        if 0 <= ci < len(slot):
+            slot[ci] = data
+        else:
+            self._logger.warning(
+                "Session %s: chunk_index %d out of range for "
+                "transfer_id %s (num_chunks=%d).",
+                self.id, ci, tid, nc)
+            return
 
         # Check if all files have received all their chunks.
         all_complete = (
             len(transfer["num_chunks"]) == fc
             and all(
-                len(transfer["file_data"][i]) >= transfer["num_chunks"][i]
+                None not in transfer["file_data"][i]
                 for i in range(fc)
             )
         )
@@ -274,16 +315,17 @@ class Session:
         for i, fmeta in enumerate(files_meta):
             fsize = fmeta.get("size", 0)
             total_bytes += fsize
-            nc = transfer["num_chunks"].get(i)
-            if nc:
-                received = len(transfer["file_data"].get(i, []))
-                transferred_bytes += fsize * received // nc
+            n = transfer["num_chunks"].get(i)
+            if n:
+                slots = transfer["file_data"].get(i, [])
+                received = sum(1 for s in slots if s is not None)
+                transferred_bytes += fsize * received // n
 
         progress_info = {
             "transfer_id": tid,
             "file_index": fi,
-            "chunk_index": msg["chunk_index"],
-            "num_chunks": msg["num_chunks"],
+            "chunk_index": ci,
+            "num_chunks": nc,
             "transferred_bytes": transferred_bytes,
             "total_bytes": total_bytes,
             "complete": all_complete,
@@ -299,8 +341,8 @@ class Session:
             # Reassemble file data and fire the original callback.
             payload = transfer["payload"]
             for i, file_meta in enumerate(payload["files"]):
-                file_meta["data"] = "".join(
-                    transfer["file_data"].get(i, []))
+                slots = transfer["file_data"].get(i, [])
+                file_meta["data"] = b"".join(slots)
             del self._transfers[tid]
             self._dispatch_callback(
                 transfer["wid"], action, payload)
@@ -660,6 +702,69 @@ class Session:
             await ws.send(data)
         for ws in self._connections:
             task = asyncio.ensure_future(_pair(ws))
+            task.add_done_callback(_drain_send_exception)
+
+    def _send_binary_chunked(self, wid, method, args, data,
+                             chunk_size=512 * 1024,
+                             shape=None, dtype=None):
+        """Fire-and-forget chunked binary call (async variant).
+
+        See the sync :meth:`Session._send_binary_chunked` for the full
+        description, including the optional ``shape``/``dtype`` that
+        promote the receiver's payload from a raw ``ArrayBuffer`` to
+        a typed array.  Each connection's chunks are scheduled as a
+        single coroutine so they ship atomically.
+        """
+        if not self._connections:
+            return
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError(
+                "_send_binary_chunked: data must be bytes-like, got "
+                + type(data).__name__)
+        data = bytes(data)
+        n = len(data)
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        num_chunks = max(1, (n + chunk_size - 1) // chunk_size)
+        msg_id = self._next_id
+        self._next_id += 1
+        transfer_id = self._next_id
+        self._next_id += 1
+        announce_obj = {
+            "type": "binary-call-chunked",
+            "id": msg_id,
+            "wid": wid,
+            "method": method,
+            "args": list(args),
+            "transfer_id": transfer_id,
+            "num_chunks": num_chunks,
+        }
+        if shape is not None:
+            announce_obj["shape"] = list(shape)
+        if dtype is not None:
+            announce_obj["dtype"] = dtype
+        announce = json.dumps(announce_obj, cls=JsonEncoder)
+        pairs = []
+        for ci in range(num_chunks):
+            start = ci * chunk_size
+            end = min(start + chunk_size, n)
+            header = json.dumps({
+                "type": "binary-chunk",
+                "transfer_id": transfer_id,
+                "chunk_index": ci,
+                "num_chunks": num_chunks,
+                "encoding": "binary",
+            }, cls=JsonEncoder)
+            pairs.append((header, data[start:end]))
+
+        async def _send_all(ws):
+            await ws.send(announce)
+            for hdr, payload in pairs:
+                await ws.send(hdr)
+                await ws.send(payload)
+
+        for ws in self._connections:
+            task = asyncio.ensure_future(_send_all(ws))
             task.add_done_callback(_drain_send_exception)
 
     async def _listen(self, wid, action, handler):
@@ -1079,12 +1184,13 @@ class Session:
                 continue
 
             # Binary-payload state (e.g. set_binary_image) replays via
-            # _send_binary so the bytes go in a raw frame, not embedded
-            # as base64 in JSON.
+            # _send_binary / _send_binary_chunked.  Large payloads
+            # switch to chunked transport automatically.
             if key in BINARY_STATE_KEYS:
                 method_name = BINARY_STATE_KEYS[key]
                 fmt, data = value
-                self._send_binary(widget._wid, method_name, [fmt], data)
+                _send_binary_auto(self, widget._wid, method_name,
+                                  [fmt], data)
                 continue
 
             if key in self._STATE_KEY_TO_SETTER:

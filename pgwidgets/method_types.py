@@ -338,6 +338,34 @@ def _menuaction_get_state(self):
     """Alias for MenuAction.get_checked — keeps a single state key."""
     return self.get_checked()
 
+# Above this size (bytes), set_binary_image switches from the single-
+# frame _send_binary transport to the chunked _send_binary_chunked
+# transport.  Keeps small frames cheap and lets multi-megabyte frames
+# yield to other WebSocket traffic between chunks.
+_BINARY_CHUNK_THRESHOLD = 1 * 1024 * 1024  # 1 MiB
+
+
+def _send_binary_auto(session, wid, method, args, data):
+    """Pick single-frame or chunked transport based on payload size.
+
+    If ``data`` is a :class:`pgwidgets.Buffer`, its bytes ship via the
+    chunked transport (regardless of size) with ``shape`` and
+    ``dtype`` attached to the announce so the JS receiver constructs
+    a typed array.  Plain bytes-like input falls back to the size
+    heuristic (chunked above ~1 MiB, single-frame below).
+    """
+    from pgwidgets.buffer import Buffer  # local import to avoid cycle
+    if isinstance(data, Buffer):
+        session._send_binary_chunked(
+            wid, method, args, data.data,
+            shape=data.shape, dtype=data.dtype)
+        return
+    if len(data) > _BINARY_CHUNK_THRESHOLD:
+        session._send_binary_chunked(wid, method, args, data)
+    else:
+        session._send_binary(wid, method, args, data)
+
+
 def _image_set_binary_image(self, data, format="jpeg"):
     """Set the image from raw bytes via a WebSocket binary frame.
 
@@ -358,6 +386,10 @@ def _image_set_binary_image(self, data, format="jpeg"):
     that reconstruction after a browser reconnect re-sends the most
     recently set image.  Earlier set_image (URL-based) state is
     cleared since the two methods are mutually exclusive.
+
+    Large payloads (above ~1 MiB) automatically use the chunked
+    binary transport so the WebSocket can interleave other messages
+    while the image streams.
     """
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise TypeError(
@@ -365,8 +397,8 @@ def _image_set_binary_image(self, data, format="jpeg"):
     data = bytes(data)
     self._state.pop("image", None)
     self._state["binary_image"] = (format, data)
-    self._session._send_binary(
-        self._wid, "set_binary_image", [format], data)
+    _send_binary_auto(self._session, self._wid,
+                      "set_binary_image", [format], data)
 
 # State keys whose value is a (format, bytes) tuple that must be
 # replayed via _send_binary instead of _call during reconstruction.

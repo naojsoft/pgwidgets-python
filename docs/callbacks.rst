@@ -127,9 +127,10 @@ The protocol works as follows:
    metadata (names, sizes, MIME types) but no file data.
 2. The framework fires a **drop-start** callback with the metadata so you
    can show progress UI.
-3. The browser sends ``file-chunk`` messages with base64-encoded data.
+3. The browser sends ``binary-chunk`` JSON headers, each followed by a raw
+   binary WebSocket frame carrying the chunk's bytes (no base64 inflation).
 4. The framework fires **drop-progress** callbacks with transfer status.
-5. When all chunks arrive, the framework reassembles the data and fires the
+5. When all chunks arrive, the framework reassembles the bytes and fires the
    **drop-end** callback with the complete payload.
 
 drop-start
@@ -175,22 +176,16 @@ drop-end
 ~~~~~~~~
 
 Fires when all file data has been received. The handler receives the full
-payload with base64 data URIs:
+payload; each file's ``data`` field is raw ``bytes``:
 
 .. code-block:: python
-
-   import base64
 
    def on_drop(payload):
        for f in payload["files"]:
            name = f["name"]
            size = f["size"]
-           mime = f["type"]
-           data_uri = f["data"]  # "data:<mime>;base64,<data>"
-
-           # Decode the file content
-           b64 = data_uri.split(",", 1)[1]
-           content = base64.b64decode(b64)
+           mime = f["type"]      # e.g. "image/png"
+           content = f["data"]   # bytes
            print(f"Received {name}: {len(content)} bytes")
 
    widget.on("drop-end", on_drop)
@@ -210,8 +205,7 @@ Example: File Drop Zone
 
    def on_drop(payload):
        f = payload["files"][0]
-       b64 = f["data"].split(",", 1)[1]
-       text = base64.b64decode(b64).decode("utf-8", errors="replace")
+       text = f["data"].decode("utf-8", errors="replace")
        textarea.set_text(text)
        drop_label.set_text(f"Loaded: {f['name']}")
 

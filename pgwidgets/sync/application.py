@@ -33,7 +33,7 @@ from pgwidgets.method_types import (
     STATE_SYNC_CALLBACKS, STATE_SYNC_REQUIRES_OPTION,
     WIDGET_CALLBACK_SYNC, POST_CHILDREN_STATE_KEYS, ITEM_LIST_CONFIG,
     CHILD_CLOSE_CALLBACKS, REPLAY_METHODS, TREE_VIEW_WIDGETS,
-    BINARY_STATE_KEYS,
+    BINARY_STATE_KEYS, _send_binary_auto,
 )
 
 _CONCURRENCY_MODES = ("serialized", "per_session", "concurrent")
@@ -169,6 +169,11 @@ class Session:
 
         self._widget_classes = app._widget_classes
         self._transfers = {}     # transfer_id -> transfer state dict
+        # FIFO of binary-chunk JSON headers (encoding="binary") still
+        # awaiting their paired raw binary frame.  Each connection's
+        # send order on the JS side is single-threaded, so a simple
+        # FIFO suffices on the receive side too.
+        self._pending_binary_headers = []
         self._callback_source_ws = None  # ws that sent current callback
 
         self._reconstructing = False  # suppress callbacks during reconstruction
@@ -273,6 +278,20 @@ class Session:
     # -- Message handling --
 
     def _handle_message(self, data):
+        # Raw binary frames are chunk payloads — pair with the head of
+        # the pending-binary FIFO (a list of binary-chunk JSON headers
+        # whose encoding == "binary").  This is symmetric with the
+        # JS-side intake.
+        if isinstance(data, (bytes, bytearray, memoryview)):
+            queue = self._pending_binary_headers
+            if not queue:
+                self._logger.warning(
+                    "Session %s: unexpected binary frame with no "
+                    "queued header (ignored).", self.id)
+                return
+            header = queue.pop(0)
+            self._handle_binary_chunk(header, bytes(data))
+            return
         msg = json.loads(data)
         if isinstance(msg, list):
             for m in msg:
@@ -293,8 +312,20 @@ class Session:
         elif msg_type == "viewport":
             self._screen_size = (msg.get("width", 0), msg.get("height", 0))
 
-        elif msg_type == "file-chunk":
-            self._handle_file_chunk(msg)
+        elif msg_type == "binary-chunk":
+            # Either reserves the next binary frame (encoding="binary")
+            # or carries an inline base64 payload (encoding="base64").
+            encoding = msg.get("encoding", "binary")
+            if encoding == "binary":
+                self._pending_binary_headers.append(msg)
+            elif encoding == "base64":
+                import base64 as _b64
+                payload = _b64.b64decode(msg.get("data") or "")
+                self._handle_binary_chunk(msg, payload)
+            else:
+                self._logger.warning(
+                    "Session %s: unknown binary-chunk encoding %r "
+                    "(ignored).", self.id, encoding)
 
         elif msg_type == "callback":
             # If the payload has a transfer_id, stash the metadata —
@@ -321,25 +352,45 @@ class Session:
             self._dispatch_callback(
                 msg["wid"], msg["action"], *msg.get("args", []))
 
-    def _handle_file_chunk(self, msg):
-        """Handle a file-chunk message: buffer data and fire callbacks."""
-        tid = msg["transfer_id"]
+    def _handle_binary_chunk(self, header, data):
+        """Buffer one chunk of an in-flight transfer.
+
+        ``header`` is the parsed binary-chunk JSON; ``data`` is the
+        chunk's raw bytes (either from the paired binary WebSocket
+        frame or decoded from an inline base64 ``data`` field).
+
+        For file-upload transfers (drag-drop, FileDialog), the header
+        also carries ``file_index`` / ``file_count`` so multiple files
+        can be reassembled in parallel.  For other future server-bound
+        chunked transports, those fields can be omitted.
+        """
+        tid = header["transfer_id"]
         transfer = self._transfers.get(tid)
         if transfer is None:
             return
 
-        fi = msg["file_index"]
-        fc = msg["file_count"]
+        fi = header.get("file_index", 0)
+        fc = header.get("file_count", 1)
+        ci = header["chunk_index"]
+        nc = header["num_chunks"]
         if fi not in transfer["file_data"]:
-            transfer["file_data"][fi] = []
-            transfer["num_chunks"][fi] = msg["num_chunks"]
-        transfer["file_data"][fi].append(msg["data"])
+            transfer["file_data"][fi] = [None] * nc
+            transfer["num_chunks"][fi] = nc
+        slot = transfer["file_data"][fi]
+        if 0 <= ci < len(slot):
+            slot[ci] = data
+        else:
+            self._logger.warning(
+                "Session %s: chunk_index %d out of range for "
+                "transfer_id %s (num_chunks=%d).",
+                self.id, ci, tid, nc)
+            return
 
         # Check if all files have received all their chunks.
         all_complete = (
             len(transfer["num_chunks"]) == fc
             and all(
-                len(transfer["file_data"][i]) >= transfer["num_chunks"][i]
+                None not in transfer["file_data"][i]
                 for i in range(fc)
             )
         )
@@ -351,16 +402,17 @@ class Session:
         for i, fmeta in enumerate(files_meta):
             fsize = fmeta.get("size", 0)
             total_bytes += fsize
-            nc = transfer["num_chunks"].get(i)
-            if nc:
-                received = len(transfer["file_data"].get(i, []))
-                transferred_bytes += fsize * received // nc
+            n = transfer["num_chunks"].get(i)
+            if n:
+                slots = transfer["file_data"].get(i, [])
+                received = sum(1 for s in slots if s is not None)
+                transferred_bytes += fsize * received // n
 
         progress_info = {
             "transfer_id": tid,
             "file_index": fi,
-            "chunk_index": msg["chunk_index"],
-            "num_chunks": msg["num_chunks"],
+            "chunk_index": ci,
+            "num_chunks": nc,
             "transferred_bytes": transferred_bytes,
             "total_bytes": total_bytes,
             "complete": all_complete,
@@ -376,8 +428,8 @@ class Session:
             # Reassemble file data and fire the original callback.
             payload = transfer["payload"]
             for i, file_meta in enumerate(payload["files"]):
-                file_meta["data"] = "".join(
-                    transfer["file_data"].get(i, []))
+                slots = transfer["file_data"].get(i, [])
+                file_meta["data"] = b"".join(slots)
             del self._transfers[tid]
             self._dispatch_callback(
                 transfer["wid"], action, payload)
@@ -714,6 +766,91 @@ class Session:
             except RuntimeError as e:
                 print(f"[SCHED_BINARY] loop refused coroutine: {e!r}",
                       flush=True)
+                coro.close()
+                continue
+            fut.add_done_callback(_drain_send_exception)
+
+    def _send_binary_chunked(self, wid, method, args, data,
+                             chunk_size=512 * 1024,
+                             shape=None, dtype=None):
+        """Fire-and-forget chunked binary call.
+
+        Splits ``data`` (bytes) into ``chunk_size`` chunks and sends
+        them as a ``binary-call-chunked`` announce followed by N
+        (``binary-chunk`` JSON + raw binary frame) pairs.  The JS side
+        reassembles into a single ``ArrayBuffer`` and dispatches as
+        ``widget[method](buffer, *args)``.
+
+        When ``shape`` and ``dtype`` are provided, they are attached to
+        the announce header and the JS receiver constructs a typed
+        array (``Uint8Array``, ``Float32Array``, …) instead of a raw
+        ``ArrayBuffer`` before dispatch.  This is what :class:`Buffer`
+        arguments end up doing.
+
+        All chunks for a single transfer ship atomically on each
+        connection (one coroutine per connection) so they can't
+        interleave with other binary sends from another thread.
+        """
+        if not self._connections:
+            return
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError(
+                "_send_binary_chunked: data must be bytes-like, got "
+                + type(data).__name__)
+        data = bytes(data)
+        n = len(data)
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        num_chunks = max(1, (n + chunk_size - 1) // chunk_size)
+        with self._lock:
+            msg_id = self._next_id
+            self._next_id += 1
+            transfer_id = self._next_id
+            self._next_id += 1
+        announce_obj = {
+            "type": "binary-call-chunked",
+            "id": msg_id,
+            "wid": wid,
+            "method": method,
+            "args": list(args),
+            "transfer_id": transfer_id,
+            "num_chunks": num_chunks,
+        }
+        if shape is not None:
+            announce_obj["shape"] = list(shape)
+        if dtype is not None:
+            announce_obj["dtype"] = dtype
+        announce = json.dumps(announce_obj, cls=JsonEncoder)
+        # Pre-build chunk headers + slices so JSON encoding cost is
+        # paid once even if multiple browsers are connected.
+        pairs = []
+        for ci in range(num_chunks):
+            start = ci * chunk_size
+            end = min(start + chunk_size, n)
+            header = json.dumps({
+                "type": "binary-chunk",
+                "transfer_id": transfer_id,
+                "chunk_index": ci,
+                "num_chunks": num_chunks,
+                "encoding": "binary",
+            }, cls=JsonEncoder)
+            pairs.append((header, data[start:end]))
+
+        async def _send_all(ws):
+            await ws.send(announce)
+            for header, payload in pairs:
+                await ws.send(header)
+                await ws.send(payload)
+
+        for ws in self._connections:
+            coro = _send_all(ws)
+            try:
+                fut = asyncio.run_coroutine_threadsafe(coro,
+                                                       self._app._loop)
+            except RuntimeError as e:
+                self._logger.warning(
+                    "Session %s: loop refused chunked-binary coroutine: %r",
+                    self.id, e)
                 coro.close()
                 continue
             fut.add_done_callback(_drain_send_exception)
@@ -1219,12 +1356,14 @@ class Session:
                 continue
 
             # Binary-payload state (e.g. set_binary_image) replays via
-            # _send_binary so the bytes go in a raw frame, not embedded
-            # as base64 in JSON.
+            # _send_binary / _send_binary_chunked so the bytes go in
+            # raw frame(s), not embedded as base64 in JSON.  Large
+            # payloads switch to chunked transport automatically.
             if key in BINARY_STATE_KEYS:
                 method_name = BINARY_STATE_KEYS[key]
                 fmt, data = value
-                self._send_binary(widget._wid, method_name, [fmt], data)
+                _send_binary_auto(self, widget._wid, method_name,
+                                  [fmt], data)
                 continue
 
             if key in self._STATE_KEY_TO_SETTER:

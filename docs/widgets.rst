@@ -596,6 +596,12 @@ are pushed per second.  ``format`` is one of ``'jpeg'``, ``'png'``,
 The latest frame is also stored in widget state so it is replayed
 on reconnect.
 
+Payloads larger than ~1 MiB automatically use the *chunked* binary
+transport (``binary-call-chunked`` + per-chunk ``binary-chunk``
+messages) so the WebSocket can interleave control traffic while a
+large frame streams.  No API change for callers — pass ``bytes``
+and the framework picks the right transport.
+
 Canvas
 ~~~~~~
 
