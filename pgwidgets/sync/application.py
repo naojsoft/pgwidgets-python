@@ -1605,13 +1605,24 @@ class Application:
 
     def __init__(self, ws_port=9500, http_port=9501, host="127.0.0.1",
                  http_server=True, concurrency_handling="per_session",
-                 max_sessions=1, logger=None):
+                 max_sessions=1, logger=None, ws_sock=None):
         if concurrency_handling not in _CONCURRENCY_MODES:
             raise ValueError(
                 f"concurrency_handling must be one of "
                 f"{_CONCURRENCY_MODES!r}, got {concurrency_handling!r}")
         self._host = host
-        self._ws_port = ws_port
+        # ws_sock, if provided, is a bound TCP socket the WebSocket
+        # server should adopt directly.  This removes the TOCTOU race
+        # that would otherwise exist between "find a free port" and
+        # "bind that port" — the caller binds, hands the socket in,
+        # and we never release the port between the two steps.
+        # ``ws_port`` is read back from the socket so logging /
+        # introspection still report a useful value.
+        self._ws_sock = ws_sock
+        if ws_sock is not None:
+            self._ws_port = ws_sock.getsockname()[1]
+        else:
+            self._ws_port = ws_port
         self._http_port = http_port
         self._use_http_server = http_server
         self._concurrency = concurrency_handling
@@ -1734,9 +1745,14 @@ class Application:
         self._loop.run_until_complete(self._serve_ws())
 
     async def _serve_ws(self):
-        async with websockets.serve(self._ws_handler, self._host,
-                                    self._ws_port):
-            await asyncio.Future()
+        if self._ws_sock is not None:
+            async with websockets.serve(self._ws_handler,
+                                        sock=self._ws_sock):
+                await asyncio.Future()
+        else:
+            async with websockets.serve(self._ws_handler, self._host,
+                                        self._ws_port):
+                await asyncio.Future()
 
     async def _ws_handler(self, ws):
         # Init handshake: send init, receive ack which may contain

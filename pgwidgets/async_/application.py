@@ -1395,13 +1395,20 @@ class Application:
 
     def __init__(self, ws_port=9500, http_port=9501, host="127.0.0.1",
                  http_server=True, concurrency_handling="per_session",
-                 max_sessions=1, logger=None):
+                 max_sessions=1, logger=None, ws_sock=None):
         if concurrency_handling not in _CONCURRENCY_MODES:
             raise ValueError(
                 f"concurrency_handling must be one of "
                 f"{_CONCURRENCY_MODES!r}, got {concurrency_handling!r}")
         self._host = host
-        self._ws_port = ws_port
+        # ws_sock, if provided, is a bound TCP socket the WebSocket
+        # server should adopt directly — see the sync :class:`Application`
+        # for the rationale (TOCTOU-free port allocation).
+        self._ws_sock = ws_sock
+        if ws_sock is not None:
+            self._ws_port = ws_sock.getsockname()[1]
+        else:
+            self._ws_port = ws_port
         self._http_port = http_port
         self._use_http_server = http_server
         self._concurrency = concurrency_handling
@@ -1758,8 +1765,12 @@ class Application:
         self._logger.info(
             f"WebSocket on ws://{self._host}:{self._ws_port}")
 
-        self._ws_server = await websockets.serve(
-            self._ws_handler, self._host, self._ws_port)
+        if self._ws_sock is not None:
+            self._ws_server = await websockets.serve(
+                self._ws_handler, sock=self._ws_sock)
+        else:
+            self._ws_server = await websockets.serve(
+                self._ws_handler, self._host, self._ws_port)
 
     async def close(self):
         """Close all sessions and shut down the application.
