@@ -176,12 +176,24 @@ drop-end
 ~~~~~~~~
 
 Fires when all file data has been received. The handler receives the full
-payload; each file's ``data`` field is raw ``bytes``:
+payload; each file dict carries:
+
+- ``name`` (str) — original filename
+- ``size`` (int) — byte size
+- ``type`` (str) — MIME type from the browser (e.g. ``"image/png"``)
+- ``encoding`` (str) — wire format of ``data``.  Currently always
+  ``"bytes"`` (``data`` is raw bytes); reserved for ``"base64"`` if a
+  future sender chooses to deliver the file body without binary
+  reassembly.
+- ``data`` (bytes or None) — file contents.  ``None`` on read error;
+  in that case an additional ``error`` field carries the message.
 
 .. code-block:: python
 
    def on_drop(payload):
        for f in payload["files"]:
+           if f["encoding"] != "bytes":
+               continue  # currently only "bytes" is emitted
            name = f["name"]
            size = f["size"]
            mime = f["type"]      # e.g. "image/png"
