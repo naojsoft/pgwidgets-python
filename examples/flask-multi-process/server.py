@@ -112,16 +112,16 @@ def index():
     server can be reached as ``localhost``, by IP, or by DNS name
     without configuration.
     """
-    port_queue = multiprocessing.Queue()
+    comm_queue = multiprocessing.Queue()
     child = multiprocessing.Process(
-        target=build_app, args=(port_queue, _BIND_HOST), daemon=True,
+        target=build_app, args=(comm_queue, _BIND_HOST), daemon=True,
         name="pgwidgets-app",
     )
     child.start()
     _children.append(child)
 
     try:
-        ws_port = port_queue.get(timeout=5.0)
+        ws_port = comm_queue.get(timeout=5.0)
     except _queue_mod.Empty:
         log.error("child pid=%d did not report its port within timeout",
                   child.pid)
