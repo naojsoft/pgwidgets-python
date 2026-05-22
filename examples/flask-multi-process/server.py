@@ -32,7 +32,9 @@ import queue as _queue_mod
 import sys
 from pathlib import Path
 
-from flask import Flask, render_template_string, request
+import pgwidgets_js
+from flask import (Flask, render_template_string, request,
+                   send_from_directory)
 
 # Make the sibling user_app.py importable regardless of the
 # directory ``server.py`` is launched from.  multiprocessing.spawn
@@ -42,6 +44,11 @@ from flask import Flask, render_template_string, request
 sys.path.insert(0, str(Path(__file__).parent))
 
 from user_app import build_app   # noqa: E402  (import after sys.path tweak)
+
+# Directory containing the bundled pgwidgets-js static assets
+# (Widgets.js, Widgets.css, modules/, icons/, …).  Served from
+# Flask so the page does not depend on a CDN being reachable.
+PGWIDGETS_JS_ROOT = pgwidgets_js.get_static_path()
 
 
 # -- Flask boilerplate -----------------------------------------------
@@ -54,10 +61,11 @@ log = logging.getLogger("flask-demo.server")
 # ``flask run server`` / WSGI runners still work without CLI args.
 _BIND_HOST = "127.0.0.1"
 
-# Loaded HTML template — embeds the per-visitor WebSocket URL.  Uses
-# the published pgwidgets-js bundle from jsdelivr so the demo has no
-# build step.  Replace the import-map URL with a local path if you
-# need to run offline or test against a working-copy of pgwidgets-js.
+# Loaded HTML template — embeds the per-visitor WebSocket URL.
+# pgwidgets-js is served from the local pip-installed package via
+# the /pgwidgets-js/<path> route below, so the page doesn't depend
+# on network access to a CDN and always matches whatever version
+# of pgwidgets-js is pinned in your environment.
 HTML_TEMPLATE = """\
 <!DOCTYPE html>
 <html lang="en">
@@ -65,12 +73,9 @@ HTML_TEMPLATE = """\
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>pgwidgets demo</title>
-  <link rel="stylesheet"
-        href="https://cdn.jsdelivr.net/npm/pgwidgets/Widgets.css">
+  <link rel="stylesheet" href="/pgwidgets-js/Widgets.css">
   <script type="importmap">
-    {"imports": {
-        "pgwidgets": "https://cdn.jsdelivr.net/npm/pgwidgets/Widgets.js"
-    }}
+    {"imports": {"pgwidgets": "/pgwidgets-js/Widgets.js"}}
   </script>
   <style>body { margin: 0; }</style>
 </head>
@@ -139,6 +144,16 @@ def index():
              child.pid, _BIND_HOST, ws_port, ws_host, ws_port)
     return render_template_string(HTML_TEMPLATE,
                                   ws_host=ws_host, ws_port=ws_port)
+
+
+@app.route("/pgwidgets-js/<path:filename>")
+def pgwidgets_js_static(filename):
+    """Serve pgwidgets-js's bundled static assets from the pip-
+    installed copy.  The Widgets.js entry point uses relative imports
+    (``./modules/Widget.js`` etc.), so the entire subtree has to be
+    reachable under one URL prefix — ``send_from_directory`` handles
+    that correctly out of the box."""
+    return send_from_directory(PGWIDGETS_JS_ROOT, filename)
 
 
 @app.route("/favicon.ico")

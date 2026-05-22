@@ -20,7 +20,7 @@ with its own WebSocket port.
 ## Run
 
 ```
-pip install Flask pgwidgets-python
+pip install Flask pgwidgets-python pgwidgets-js
 python server.py
 # browse to http://localhost:5000/
 ```
@@ -50,11 +50,19 @@ configuration.
 
 ## What the browser loads
 
-Each HTML response embeds the per-visitor WebSocket URL and pulls
-pgwidgets-js straight from the published CDN bundle (no build step,
-no static assets to serve).  If you want to point at a local
-checkout of pgwidgets-js, edit the import-map URL in
-`server.HTML_TEMPLATE`.
+Each HTML response embeds the per-visitor WebSocket URL.  The
+pgwidgets-js bundle (`Widgets.js`, `Widgets.css`, the `modules/`
+subtree, icons) is served by Flask itself, from the pip-installed
+`pgwidgets-js` Python package — `pgwidgets_js.get_static_path()`
+returns the directory and a `/pgwidgets-js/<path>` route in
+`server.py` exposes it.  No CDN, no network dependency at runtime,
+and the version on the wire always matches the one in your venv.
+
+To point at an in-progress working copy of pgwidgets-js instead of
+the installed package, either ``pip install -e .`` from the
+pgwidgets-js source tree (so `get_static_path()` resolves to the
+working copy), or replace `PGWIDGETS_JS_ROOT` in `server.py` with
+a hard path to that tree's `static/` directory.
 
 ## Caveats
 
@@ -62,7 +70,3 @@ checkout of pgwidgets-js, edit the import-map URL in
   process, which combined with `multiprocessing` can produce
   surprising behavior on Windows / macOS.  Restart `server.py` by
   hand after edits.
-- **CDN dependency.** The HTML loads pgwidgets-js from
-  `cdn.jsdelivr.net`.  For offline use, replace the import-map URL
-  with `/static/...` and serve pgwidgets-js's `Widgets.js` /
-  `Widgets.css` from Flask.
