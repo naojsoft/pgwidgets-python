@@ -1,6 +1,76 @@
 What's New
 ==========
 
+Recent changes — since ``v0.2.3``
+---------------------------------
+
+Chunked binary transport (both directions)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``Session`` gained ``_send_binary_chunked(wid, method, args, data,
+chunk_size=512KB, shape=None, dtype=None)`` and a matching
+incoming-binary path.  Large payloads automatically use the
+chunked transport — :meth:`Image.set_binary_image` (and the
+reconstruction replay of binary state) auto-pick chunked above a
+1 MiB threshold.  ``Session._handle_file_chunk`` was rewritten as
+``_handle_binary_chunk`` to consume the new binary-chunk
+envelope: chunks store by ``chunk_index`` (robust to ordering)
+and reassemble as ``bytes``.
+
+**Pre-1.0 API break**: drop-end / FileDialog ``activated``
+handlers now receive each file's ``data`` field as raw ``bytes``
+(was a ``"data:<mime>;base64,…"`` string).  Each file dict now
+also carries an ``encoding`` field (currently ``"bytes"``;
+reserved for future ``"base64"``).
+
+:class:`pgwidgets.Buffer` for typed-array delivery
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+New :class:`pgwidgets.Buffer` wraps raw bytes with ``shape`` and
+``dtype`` metadata.  When passed to a binary-aware method, the
+bytes ride the chunked transport and the receiver on the JS side
+gets a typed array of the right shape (``Uint8Array``,
+``Float32Array``, …) without the per-method casting that used to
+be necessary::
+
+   from pgwidgets import Buffer
+   pixels = ...  # 2048 * 2048 * 4 bytes
+   viewer.load_buffer(
+       Buffer(pixels, shape=(2048, 2048, 4), dtype="uint8"),
+       [2048, 2048], cache)
+
+Supported dtypes: ``uint8`` / ``uint16`` / ``uint32`` / ``int8``
+/ ``int16`` / ``int32`` / ``float32`` / ``float64``.
+Construction validates that ``len(data) == prod(shape) *
+itemsize``.
+
+``Application(ws_sock=…)`` for race-free port allocation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:class:`Application` accepts an optional pre-bound TCP socket via
+``ws_sock=``.  When provided, ``Application`` adopts the socket
+directly (hands it to ``websockets.serve(sock=...)``) instead of
+binding ``(host, ws_port)`` itself, and reads ``ws_port`` back
+from the socket for logging.  The motivation is TOCTOU-free port
+allocation: the caller can bind in advance, hand the socket in,
+and never release the port between "find" and "use" — no other
+process can grab it in the gap.  The existing ``ws_port=`` API
+is unchanged.
+
+Flask multi-process demo
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+New ``examples/flask-multi-process/`` example: one pgwidgets
+``Application`` per visitor, each in its own OS process with its
+own WebSocket port.  Demonstrates the new ``ws_sock=`` parameter
+(child binds, never releases), idle reaping via a grace timer on
+``app.on_disconnect`` that handles the subtle case where
+``app.on_connect`` doesn't fire on session-reconnect (the wrapper
+also hooks ``session.add_connection``), and serving pgwidgets-js's
+static assets from the pip-installed package rather than a CDN.
+
+----
+
 Recent changes — since ``v0.2.1``
 ---------------------------------
 
