@@ -30,6 +30,7 @@ import logging
 import multiprocessing
 import queue as _queue_mod
 import sys
+import threading
 from pathlib import Path
 
 import pgwidgets_js
@@ -93,10 +94,37 @@ HTML_TEMPLATE = """\
 
 # Keep references to spawned processes so they aren't garbage-
 # collected (Process.__del__ doesn't kill the child, but we still
-# want a tidy registry for shutdown).  Production code should also
-# reap idle children based on whether their pgwidgets Application
-# has any live connections.
+# want a tidy registry for shutdown).
 _children = []
+_children_lock = threading.Lock()
+
+
+def _reap_dead_children():
+    """Prune ``_children`` of any process that has exited.
+
+    Calling ``Process.is_alive()`` invokes ``waitpid(pid, WNOHANG)``
+    under the hood, which collects the exit status of a dead child
+    and lets the kernel free its process-table entry — so this
+    doubles as a zombie reaper.
+
+    Without this, children that self-terminate via the idle-grace
+    timer in ``user_app.py`` would linger as defunct (Z) processes
+    until Flask itself exits.  ``daemon=True`` only matters at
+    parent shutdown; it does not reap exited children during normal
+    operation.
+    """
+    with _children_lock:
+        live = []
+        for c in _children:
+            if c.is_alive():
+                live.append(c)
+            else:
+                # Belt-and-braces: explicit join with timeout=0 to
+                # ensure the OS-level waitpid happens even if some
+                # future Process implementation makes is_alive()
+                # skip it.
+                c.join(timeout=0)
+        _children[:] = live
 
 
 @app.route("/")
@@ -117,13 +145,19 @@ def index():
     server can be reached as ``localhost``, by IP, or by DNS name
     without configuration.
     """
+    # Opportunistically reap any children that have self-terminated
+    # via the idle-grace timer.  Without this they linger as
+    # zombies until Flask exits (see ``_reap_dead_children``).
+    _reap_dead_children()
+
     comm_queue = multiprocessing.Queue()
     child = multiprocessing.Process(
         target=build_app, args=(comm_queue, _BIND_HOST), daemon=True,
         name="pgwidgets-app",
     )
     child.start()
-    _children.append(child)
+    with _children_lock:
+        _children.append(child)
 
     try:
         ws_port = comm_queue.get(timeout=5.0)
@@ -163,10 +197,21 @@ def favicon():
 
 
 def _shutdown_children():
-    """Best-effort cleanup of spawned children on Flask exit."""
-    for p in _children:
-        if p.is_alive():
-            p.terminate()
+    """Best-effort cleanup of spawned children on Flask exit.
+
+    ``daemon=True`` on each child already guarantees they will be
+    terminated when this process exits, but ``terminate()``-ing
+    explicitly here gives them a chance to be reaped (via the
+    follow-on ``join``) so the process table is clean rather than
+    relying on init to inherit them.
+    """
+    with _children_lock:
+        for p in _children:
+            if p.is_alive():
+                p.terminate()
+        for p in _children:
+            p.join(timeout=1.0)
+        _children.clear()
 
 
 if __name__ == "__main__":
