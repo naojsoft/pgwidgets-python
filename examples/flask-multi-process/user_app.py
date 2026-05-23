@@ -38,9 +38,19 @@ def build_app(comm_queue=None, host="127.0.0.1"):
     Parameters
     ----------
     comm_queue : multiprocessing.Queue or None
-        If given, the chosen port is reported back to the parent
-        through it.  The Flask server in ``server.py`` uses that to
-        embed the per-visitor WebSocket URL in its HTML response.
+        Channel back to the parent process.  Two tagged messages are
+        sent through it during normal operation:
+
+        * ``("port", ws_port)`` — sent once at startup, as soon as
+          the WebSocket socket is bound.  The parent reads this
+          synchronously to embed the per-visitor URL in its HTML
+          response.
+        * ``("creds", session_id, token)`` — sent once when the
+          first browser connects, so the parent can index this
+          child in a ``(session_id, token) -> port`` registry and
+          route future visitors arriving with matching credentials
+          back to this very child (instead of spawning a new one).
+
     host : str
         Interface to bind the WebSocket listener on.  ``"127.0.0.1"``
         for loopback-only, ``"0.0.0.0"`` for all interfaces, or any
@@ -93,7 +103,10 @@ class PGFlaskApp:
         self.logger.info("starting Application on ws://%s:%d", self.host,
                          self.ws_port)
         if self.comm_queue is not None:
-            self.comm_queue.put(self.ws_port)
+            # Tagged so the parent's reader can dispatch on
+            # message type — see build_app's docstring for the
+            # protocol.
+            self.comm_queue.put(("port", self.ws_port))
 
         self.app = Application(
             host=self.host,
@@ -180,6 +193,22 @@ class PGFlaskApp:
 
     def connect_cb(self, session):
         self.session = session
+
+        # Report this session's credentials to the parent so it can
+        # route future ``/?session=...&token=...`` requests back to
+        # this child instead of spawning a new process.  on_connect
+        # only fires on session *creation*, which is exactly when
+        # the credentials first become known and need to be
+        # registered — subsequent WebSocket reconnections to the
+        # same session bypass on_connect.
+        if self.comm_queue is not None:
+            try:
+                self.comm_queue.put(
+                    ("creds", session.id, session.token))
+            except Exception as e:                 # pragma: no cover
+                self.logger.warning(
+                    "could not report session credentials: %s", e)
+
         self.cancel_grace()
 
         # ``on_connect`` only fires for session creation, so we

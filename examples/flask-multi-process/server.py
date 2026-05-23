@@ -98,9 +98,18 @@ HTML_TEMPLATE = """\
 _children = []
 _children_lock = threading.Lock()
 
+# Maps ``(session_id_str, token) -> (ws_port, Process)`` for every
+# alive child whose pgwidgets Session has reported its credentials.
+# Populated by per-child reader threads as ``("creds", sid, token)``
+# messages arrive from the child's queue.  Consulted by ``/`` to
+# route returning visitors back to their original process.
+_registry = {}
+_registry_lock = threading.Lock()
+
 
 def _reap_dead_children():
-    """Prune ``_children`` of any process that has exited.
+    """Prune ``_children`` of any process that has exited, and drop
+    the matching registry entries.
 
     Calling ``Process.is_alive()`` invokes ``waitpid(pid, WNOHANG)``
     under the hood, which collects the exit status of a dead child
@@ -125,6 +134,66 @@ def _reap_dead_children():
                 # skip it.
                 c.join(timeout=0)
         _children[:] = live
+    with _registry_lock:
+        stale = [k for k, (_p, c) in _registry.items()
+                 if not c.is_alive()]
+        for k in stale:
+            del _registry[k]
+
+
+def _child_reader_thread(child, comm_queue, ws_port):
+    """Background reader that drains follow-on messages from *child*.
+
+    The initial ``("port", ws_port)`` message is consumed by the
+    request handler synchronously (so the HTTP response can return
+    the URL).  This thread handles everything after that — currently
+    just one message:
+
+        ``("creds", session_id, token)``
+
+    which is published to ``_registry`` so the matching child can be
+    found when a returning visitor arrives at
+    ``/?session=...&token=...``.
+
+    Exits when the child process dies (queue read keeps returning
+    Empty and ``is_alive()`` returns False).
+    """
+    while child.is_alive():
+        try:
+            msg = comm_queue.get(timeout=1.0)
+        except _queue_mod.Empty:
+            continue
+        if not isinstance(msg, tuple) or not msg:
+            continue
+        tag = msg[0]
+        if tag == "creds":
+            try:
+                _, sid, token = msg
+            except ValueError:
+                log.warning("malformed creds message from child "
+                            "pid=%d: %r", child.pid, msg)
+                continue
+            key = (str(sid), token)
+            with _registry_lock:
+                _registry[key] = (ws_port, child)
+            log.info("child pid=%d registered session %s "
+                     "(token prefix %s...) on port %d",
+                     child.pid, sid, str(token)[:8], ws_port)
+        else:
+            log.debug("child pid=%d sent unknown message: %r",
+                      child.pid, msg)
+
+
+def _derive_ws_host(req):
+    """Extract the hostname portion of the Host header.
+
+    rsplit handles literal IPv4 + port; IPv6 hosts
+    (``[::1]:5000``) aren't preserved here — extend with
+    urllib.parse.urlsplit if you need them.
+    """
+    if ":" in req.host:
+        return req.host.rsplit(":", 1)[0]
+    return req.host
 
 
 @app.route("/")
@@ -144,12 +213,44 @@ def index():
     hostname/IP the browser used to reach Flask — so the same
     server can be reached as ``localhost``, by IP, or by DNS name
     without configuration.
+
+    Session-aware routing: if the request URL carries
+    ``?session=N&token=ABC`` (the credentials pgwidgets-js writes
+    onto the URL after the first connect) and a child is still
+    alive serving that session, this handler returns HTML pointed
+    at the **existing** child instead of spawning a new one.  That
+    is how refreshes, bookmarks, and multi-tab sharing reach the
+    same Application — and how pgwidgets-python's session
+    reconstruct() path gets to do its job.
     """
     # Opportunistically reap any children that have self-terminated
     # via the idle-grace timer.  Without this they linger as
     # zombies until Flask exits (see ``_reap_dead_children``).
     _reap_dead_children()
 
+    # ---- Try to re-attach to an existing session ----------------
+    sid_q = request.args.get("session")
+    token_q = request.args.get("token")
+    if sid_q and token_q:
+        with _registry_lock:
+            entry = _registry.get((sid_q, token_q))
+        if entry is not None:
+            ws_port, child = entry
+            if child.is_alive():
+                ws_host = _derive_ws_host(request)
+                log.info("re-attach session %s -> child pid=%d "
+                         "on port %d (host %s)",
+                         sid_q, child.pid, ws_port, ws_host)
+                return render_template_string(HTML_TEMPLATE,
+                                              ws_host=ws_host,
+                                              ws_port=ws_port)
+            # Entry was stale — drop it and fall through to spawn.
+            with _registry_lock:
+                _registry.pop((sid_q, token_q), None)
+            log.info("registry entry for session %s pointed at dead "
+                     "child; spawning fresh process", sid_q)
+
+    # ---- Spawn a fresh per-visitor child -----------------------
     comm_queue = multiprocessing.Queue()
     child = multiprocessing.Process(
         target=build_app, args=(comm_queue, _BIND_HOST), daemon=True,
@@ -160,21 +261,40 @@ def index():
         _children.append(child)
 
     try:
-        ws_port = comm_queue.get(timeout=5.0)
+        msg = comm_queue.get(timeout=5.0)
     except _queue_mod.Empty:
         log.error("child pid=%d did not report its port within timeout",
                   child.pid)
         return ("pgwidgets app process failed to start.  "
                 "Check the server log.", 503)
 
-    # Extract hostname portion of the Host header (e.g.
-    # "example.com:5000" -> "example.com").  rsplit handles literal
-    # IPv4 + port; IPv6 hosts (``[::1]:5000``) aren't preserved here
-    # — extend with urllib.parse.urlsplit if you need them.
-    ws_host = request.host.rsplit(":", 1)[0] if ":" in request.host \
-        else request.host
+    # The first message is the bound port.  We accept both the
+    # tagged form ``("port", N)`` and a bare integer (for backward
+    # compatibility with older user_app.py revisions that just sent
+    # the port number).
+    if isinstance(msg, tuple) and len(msg) >= 2 and msg[0] == "port":
+        ws_port = int(msg[1])
+    elif isinstance(msg, int):
+        ws_port = msg
+    else:
+        log.error("unexpected first message from child pid=%d: %r",
+                  child.pid, msg)
+        return ("Bad child startup response.", 503)
 
-    log.info("child pid=%d bound on %s:%d, browser will connect to %s:%d",
+    # Drain follow-on messages (currently just the creds report)
+    # in the background, so they can populate the registry without
+    # blocking this request.
+    reader = threading.Thread(
+        target=_child_reader_thread,
+        args=(child, comm_queue, ws_port),
+        name=f"reader-{child.pid}",
+        daemon=True,
+    )
+    reader.start()
+
+    ws_host = _derive_ws_host(request)
+    log.info("spawned child pid=%d bound on %s:%d, "
+             "browser will connect to %s:%d",
              child.pid, _BIND_HOST, ws_port, ws_host, ws_port)
     return render_template_string(HTML_TEMPLATE,
                                   ws_host=ws_host, ws_port=ws_port)
