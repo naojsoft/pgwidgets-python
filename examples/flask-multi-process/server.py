@@ -79,6 +79,26 @@ HTML_TEMPLATE = """\
     {"imports": {"pgwidgets": "/pgwidgets-js/Widgets.js"}}
   </script>
   <style>body { margin: 0; }</style>
+  {% if embed_creds %}
+  <script>
+    // Bake the pre-warmed session credentials onto the URL before
+    // the pgwidgets-js module reads them.  RemoteInterface looks
+    // up ``?session=...&token=...`` in window.location.search at
+    // construction time, so as long as this runs first the
+    // browser will send the matching credentials on its WebSocket
+    // handshake — and Application's reconstruct path will replay
+    // the UI we already built onto it.  history.replaceState
+    // doesn't trigger a navigation, so this is one round-trip.
+    (function () {
+        var params = new URLSearchParams(location.search);
+        params.set("session", "{{ session_id }}");
+        params.set("token", "{{ session_token }}");
+        history.replaceState(null, "",
+            location.pathname + "?" + params.toString() +
+            (location.hash || ""));
+    })();
+  </script>
+  {% endif %}
 </head>
 <body>
   <script type="module">
@@ -141,49 +161,6 @@ def _reap_dead_children():
             del _registry[k]
 
 
-def _child_reader_thread(child, comm_queue, ws_port):
-    """Background reader that drains follow-on messages from *child*.
-
-    The initial ``("port", ws_port)`` message is consumed by the
-    request handler synchronously (so the HTTP response can return
-    the URL).  This thread handles everything after that — currently
-    just one message:
-
-        ``("creds", session_id, token)``
-
-    which is published to ``_registry`` so the matching child can be
-    found when a returning visitor arrives at
-    ``/?session=...&token=...``.
-
-    Exits when the child process dies (queue read keeps returning
-    Empty and ``is_alive()`` returns False).
-    """
-    while child.is_alive():
-        try:
-            msg = comm_queue.get(timeout=1.0)
-        except _queue_mod.Empty:
-            continue
-        if not isinstance(msg, tuple) or not msg:
-            continue
-        tag = msg[0]
-        if tag == "creds":
-            try:
-                _, sid, token = msg
-            except ValueError:
-                log.warning("malformed creds message from child "
-                            "pid=%d: %r", child.pid, msg)
-                continue
-            key = (str(sid), token)
-            with _registry_lock:
-                _registry[key] = (ws_port, child)
-            log.info("child pid=%d registered session %s "
-                     "(token prefix %s...) on port %d",
-                     child.pid, sid, str(token)[:8], ws_port)
-        else:
-            log.debug("child pid=%d sent unknown message: %r",
-                      child.pid, msg)
-
-
 def _derive_ws_host(req):
     """Extract the hostname portion of the Host header.
 
@@ -228,6 +205,8 @@ def index():
     # zombies until Flask exits (see ``_reap_dead_children``).
     _reap_dead_children()
 
+    ws_host = _derive_ws_host(request)
+
     # ---- Try to re-attach to an existing session ----------------
     sid_q = request.args.get("session")
     token_q = request.args.get("token")
@@ -237,13 +216,17 @@ def index():
         if entry is not None:
             ws_port, child = entry
             if child.is_alive():
-                ws_host = _derive_ws_host(request)
                 log.info("re-attach session %s -> child pid=%d "
                          "on port %d (host %s)",
                          sid_q, child.pid, ws_port, ws_host)
+                # Credentials are already on the URL; no need for
+                # the inline replaceState block.
                 return render_template_string(HTML_TEMPLATE,
                                               ws_host=ws_host,
-                                              ws_port=ws_port)
+                                              ws_port=ws_port,
+                                              embed_creds=False,
+                                              session_id=None,
+                                              session_token=None)
             # Entry was stale — drop it and fall through to spawn.
             with _registry_lock:
                 _registry.pop((sid_q, token_q), None)
@@ -251,6 +234,13 @@ def index():
                      "child; spawning fresh process", sid_q)
 
     # ---- Spawn a fresh per-visitor child -----------------------
+    #
+    # The child pre-creates a session and builds its UI before
+    # ``app.run()`` blocks, then reports
+    # ``("ready", ws_port, session_id, token)`` over the queue.
+    # We embed the credentials in the HTML response so the
+    # browser's WebSocket handshake lands on the pre-built
+    # session.
     comm_queue = multiprocessing.Queue()
     child = multiprocessing.Process(
         target=build_app, args=(comm_queue, _BIND_HOST), daemon=True,
@@ -263,41 +253,35 @@ def index():
     try:
         msg = comm_queue.get(timeout=5.0)
     except _queue_mod.Empty:
-        log.error("child pid=%d did not report its port within timeout",
+        log.error("child pid=%d did not signal ready within timeout",
                   child.pid)
         return ("pgwidgets app process failed to start.  "
                 "Check the server log.", 503)
 
-    # The first message is the bound port.  We accept both the
-    # tagged form ``("port", N)`` and a bare integer (for backward
-    # compatibility with older user_app.py revisions that just sent
-    # the port number).
-    if isinstance(msg, tuple) and len(msg) >= 2 and msg[0] == "port":
-        ws_port = int(msg[1])
-    elif isinstance(msg, int):
-        ws_port = msg
-    else:
-        log.error("unexpected first message from child pid=%d: %r",
+    if not (isinstance(msg, tuple) and len(msg) == 4
+            and msg[0] == "ready"):
+        log.error("unexpected startup message from child pid=%d: %r",
                   child.pid, msg)
         return ("Bad child startup response.", 503)
 
-    # Drain follow-on messages (currently just the creds report)
-    # in the background, so they can populate the registry without
-    # blocking this request.
-    reader = threading.Thread(
-        target=_child_reader_thread,
-        args=(child, comm_queue, ws_port),
-        name=f"reader-{child.pid}",
-        daemon=True,
-    )
-    reader.start()
+    _, ws_port, sid, token = msg
+    ws_port = int(ws_port)
 
-    ws_host = _derive_ws_host(request)
-    log.info("spawned child pid=%d bound on %s:%d, "
+    # Register so future ``?session=...&token=...`` requests can
+    # route back here.  Done synchronously, in the same handler,
+    # so a refresh that arrives before this function returns can't
+    # miss the entry.
+    with _registry_lock:
+        _registry[(str(sid), token)] = (ws_port, child)
+
+    log.info("spawned child pid=%d bound on %s:%d for session %s; "
              "browser will connect to %s:%d",
-             child.pid, _BIND_HOST, ws_port, ws_host, ws_port)
+             child.pid, _BIND_HOST, ws_port, sid, ws_host, ws_port)
     return render_template_string(HTML_TEMPLATE,
-                                  ws_host=ws_host, ws_port=ws_port)
+                                  ws_host=ws_host, ws_port=ws_port,
+                                  embed_creds=True,
+                                  session_id=sid,
+                                  session_token=token)
 
 
 @app.route("/pgwidgets-js/<path:filename>")

@@ -48,34 +48,63 @@ within the grace window cancels the pending shutdown.
 ### Session routing
 
 The parent keeps a `(session_id, token) → (ws_port, process)`
-registry, populated as soon as each child reports its credentials
-back through its `multiprocessing.Queue`.  The queue protocol is
-two tagged messages from the child:
+registry.  The wire protocol between parent and child is a single
+tagged message:
 
-| Message                          | Sent                                       |
-|----------------------------------|--------------------------------------------|
-| `("port", ws_port)`              | once, at startup, before `app.run()`       |
-| `("creds", session_id, token)`   | once, from `connect_cb` on first browser   |
+```
+("ready", ws_port, session_id, token)
+```
 
-The HTTP handler reads the `port` message synchronously (so it can
-return the HTML response).  A background reader thread per child
-drains the rest — currently just the `creds` message — and writes
-into `_registry`.  `/` consults the registry before spawning:
+sent by the child once, **before** `app.run()` blocks.  The child
+pre-creates a session via `Application.create_session()` and
+builds the UI on it before any browser arrives — so by the time
+the parent responds to the visitor, the credentials are already
+known and the UI is already constructed.  The HTTP handler
+embeds those credentials in the HTML response (via an inline
+`history.replaceState` that runs before the pgwidgets-js module
+script) so the browser's WebSocket handshake lands directly on
+the pre-built session and pgwidgets-python's reconstruct path
+replays the state.
 
-- credentials present in the URL **and** match an alive child →
-  return HTML pointed at that existing child;
-- credentials missing, stale, or unknown → spawn a new child.
+`/` flow:
+
+- credentials present in the URL (a refresh / bookmark / shared
+  link) **and** match an alive child → render HTML pointed at the
+  existing child;
+- credentials missing → spawn a new child, read its `ready`
+  message, register `(session_id, token) → (port, process)`, and
+  render HTML that embeds those credentials onto the URL so the
+  next handshake re-attaches.
 
 The registry is opportunistically cleaned along with the child-
 reaper (any entry whose `Process` is no longer alive is dropped),
 so dead-child credentials don't linger.
 
+### Why pre-create the session
+
+Two reasons:
+
+1. **One round-trip.**  Without prewarm, the child has no
+   credentials until the first browser handshake (where
+   `_ws_handler` creates the session), so the parent can't embed
+   them in the HTML.  You'd either redirect (`302 → /?session=…`)
+   or wait for the credentials before responding.  Prewarm makes
+   the credentials known synchronously at spawn time.
+2. **State preserved across the first refresh.**  Once the
+   credentials are baked onto the URL, a refresh lands the
+   browser on the *same* Application; `do_reconstruct` replays
+   whatever the UI has accumulated by then.  Without prewarm, the
+   first visit creates a session lazily and the credentials only
+   appear on the URL *after* the WebSocket has shaken hands —
+   leaving a small window where a very fast refresh would have
+   spawned a fresh process.
+
 ### Try it (verify the reconnect path)
 
-1. Browse to `http://localhost:5000/`.  Note that the URL bar
-   updates to include `?session=…&token=…` once the WebSocket has
-   handshaken — that's `RemoteInterface` baking the credentials
-   onto the URL for future reloads.
+1. Browse to `http://localhost:5000/`.  The URL bar immediately
+   updates to include `?session=…&token=…` — that's the inline
+   `replaceState` baking the pre-warmed session's credentials
+   onto the URL before the pgwidgets-js module loads.
 2. Interact with the demo UI (click the button so the label
    changes to "Clicked!", say).
 3. **Refresh the tab.**  The label should still say "Clicked!" —

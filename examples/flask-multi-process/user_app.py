@@ -38,18 +38,19 @@ def build_app(comm_queue=None, host="127.0.0.1"):
     Parameters
     ----------
     comm_queue : multiprocessing.Queue or None
-        Channel back to the parent process.  Two tagged messages are
-        sent through it during normal operation:
+        Channel back to the parent process.  One message is sent
+        through it at startup, **before** ``app.run()`` blocks:
 
-        * ``("port", ws_port)`` — sent once at startup, as soon as
-          the WebSocket socket is bound.  The parent reads this
-          synchronously to embed the per-visitor URL in its HTML
-          response.
-        * ``("creds", session_id, token)`` — sent once when the
-          first browser connects, so the parent can index this
-          child in a ``(session_id, token) -> port`` registry and
-          route future visitors arriving with matching credentials
-          back to this very child (instead of spawning a new one).
+        * ``("ready", ws_port, session_id, token)``
+
+        The child pre-creates a session (via
+        :meth:`Application.create_session`) and builds the UI on
+        it *before* any browser arrives — so by the time the parent
+        responds to the visitor, the credentials are already known
+        and the UI is already constructed.  The parent embeds the
+        credentials in the HTML, the browser sends them on the
+        WebSocket handshake, and pgwidgets-python's reconstruct
+        path replays the pre-built state onto the browser.
 
     host : str
         Interface to bind the WebSocket listener on.  ``"127.0.0.1"``
@@ -102,48 +103,90 @@ class PGFlaskApp:
         self.ws_port = sock.getsockname()[1]
         self.logger.info("starting Application on ws://%s:%d", self.host,
                          self.ws_port)
-        if self.comm_queue is not None:
-            # Tagged so the parent's reader can dispatch on
-            # message type — see build_app's docstring for the
-            # protocol.
-            self.comm_queue.put(("port", self.ws_port))
 
         self.app = Application(
             host=self.host,
             ws_sock=self.sock,        # adopt the already-bound socket
             http_server=False,        # Flask serves the HTML.
         )
-        self.app.on_connect(self.connect_cb)
+        # Disconnect callback wires up the idle-grace machinery.
         self.app.on_disconnect(self.disconnect_cb)
+
+        # Pre-create the session, *before* any browser arrives, so
+        # we can build the UI ahead of time and ship the
+        # credentials to the parent in one shot.  When the browser
+        # later connects with matching credentials, Application
+        # takes the reconstruct path and the pre-built state is
+        # replayed onto it.  on_connect does NOT fire in that
+        # case — so we hook ``add_connection`` here (not in a
+        # connect callback) to cancel the grace timer on every WS
+        # attach.
+        self.session = self.app.create_session()
+        _orig_add = self.session.add_connection
+
+        def _add_with_cancel(ws):
+            self.cancel_grace()
+            return _orig_add(ws)
+
+        self.session.add_connection = _add_with_cancel
+
+        # Arm the grace timer immediately.  Without this, a child
+        # whose visitor never actually loads the HTML (or whose
+        # browser fails to handshake) would sit idle forever — the
+        # disconnect callback only fires after a connect, so it
+        # wouldn't be enough.
+        self.start_grace()
+
+        # Tell the parent we're ready.  This single message
+        # carries everything it needs to render the HTML response:
+        # the WebSocket port, plus the credentials the browser
+        # should present on its first handshake so it lands on
+        # this pre-built session.
+        if self.comm_queue is not None:
+            self.comm_queue.put(
+                ("ready", self.ws_port,
+                 self.session.id, self.session.token))
+
+        # Build the UI on the pre-created session.  By the time
+        # the browser handshakes, this has already run and the
+        # session's _state / _children / _registered_callbacks are
+        # all populated — Application's reconstruct path replays
+        # them to the browser.
+        self.build_gui(self.session)
+
         return self.app
 
     def run(self):
         self.app.run()
 
-    # Idle-grace machinery.  When the last browser connection drops
-    # we start a timer; if a reconnect arrives before it fires (e.g.
-    # the browser auto-reconnecting after a network blip, or the
-    # user re-opening a tab to the same URL), it gets cancelled.
-    # Otherwise the timer calls os._exit(0) to terminate this whole
-    # child process — the cleanup the Flask demo wants since each
-    # visitor has their own process and there's no other reason to
-    # keep an idle one alive.
+    # Idle-grace machinery.  The timer arms in two situations:
+    #
+    #   1. At session creation (in build_app), so a child whose
+    #      visitor never actually loads the HTML still exits
+    #      eventually.
+    #   2. Whenever the last browser connection drops, via the
+    #      on_disconnect callback.
+    #
+    # The timer is cancelled by the ``session.add_connection``
+    # wrapper installed in build_app, which fires for every WS
+    # attach — both the initial connect and any reconnect.  This
+    # matters because pre-warmed sessions (created via
+    # ``app.create_session()`` before any browser arrives) take the
+    # reconstruct path on browser handshake, bypassing on_connect
+    # entirely; relying on on_connect for the cancel would miss
+    # both that case and the browser-auto-reconnect-after-blip
+    # case.
+    #
+    # When the timer expires, the child calls ``os._exit(0)`` —
+    # the cleanup the Flask demo wants, since each visitor has
+    # their own process and there's no other reason to keep an
+    # idle one alive.
     #
     # This is opt-in and demo-specific.  pgwidgets-python's default
     # behaviour is to keep sessions alive across disconnects (so a
     # user can refresh and find their UI exactly where they left
     # it), which is the right behaviour for a long-running single-
     # Application server.
-    #
-    # The hookup is more subtle than it looks: ``app.on_connect``
-    # only fires for *session creation*; subsequent WebSocket
-    # reconnects to the same session take the ``do_reconstruct``
-    # path inside Application and bypass on_connect entirely.  If
-    # we only cancelled on on_connect, the very common case "browser
-    # auto-reconnects after a transient drop" would let the timer
-    # fire anyway and kill the live session.  So we *also* hook
-    # ``session.add_connection``, which IS called for every WS
-    # attachment.
 
     def cancel_grace(self):
         with self.grace_lock:
@@ -190,40 +233,6 @@ class PGFlaskApp:
         # so ``is_connected`` reflects post-disconnect state.
         if not session.is_connected:
             self.start_grace()
-
-    def connect_cb(self, session):
-        self.session = session
-
-        # Report this session's credentials to the parent so it can
-        # route future ``/?session=...&token=...`` requests back to
-        # this child instead of spawning a new process.  on_connect
-        # only fires on session *creation*, which is exactly when
-        # the credentials first become known and need to be
-        # registered — subsequent WebSocket reconnections to the
-        # same session bypass on_connect.
-        if self.comm_queue is not None:
-            try:
-                self.comm_queue.put(
-                    ("creds", session.id, session.token))
-            except Exception as e:                 # pragma: no cover
-                self.logger.warning(
-                    "could not report session credentials: %s", e)
-
-        self.cancel_grace()
-
-        # ``on_connect`` only fires for session creation, so we
-        # also wrap ``session.add_connection`` to cancel the grace
-        # timer on subsequent WS reconnects to the same session
-        # (browser auto-reconnect, second tab joining, ...).
-        _orig_add = session.add_connection
-
-        def _add_with_cancel(ws):
-            self.cancel_grace()
-            return _orig_add(ws)
-
-        session.add_connection = _add_with_cancel
-
-        self.build_gui(session)
 
     def build_gui(self, session):
         """This should build up and show your UI"""
