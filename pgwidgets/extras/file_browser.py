@@ -352,8 +352,13 @@ class FileBrowser(Callbacks):
                 self._navigate_to(d)
                 self._name_entry.set_text(os.path.basename(path))
 
-    def _on_row_activated(self, values, path):
-        """Double-click on a row."""
+    def _on_row_activated(self, values, path, col_key=None):
+        """Double-click on a row.
+
+        ``col_key`` (TableView ≥ this rev) reports which cell was
+        clicked; unused here since the browser only cares about
+        the row's filename, but the arg has to be in the signature
+        or the new 3-arg dispatch raises TypeError."""
         name = values.get("name", "")
         if name == "..":
             self._go_up()
