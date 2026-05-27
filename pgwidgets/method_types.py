@@ -82,6 +82,7 @@ ACTION_METHODS = {
     "expand_all", "collapse_all", "expand_item", "collapse_item",
     "sort_by_column", "set_optimal_column_widths",
     "select_path", "select_paths", "select_all",
+    "select_cell", "select_cells", "clear_cell_selection",
     # TextSource editing
     "insert_text", "delete_range", "create_tag", "remove_tag_def",
     "apply_tag", "remove_tag", "create_ref", "remove_ref",
