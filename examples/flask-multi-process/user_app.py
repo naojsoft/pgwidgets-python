@@ -28,52 +28,6 @@ from pgwidgets.sync.application import Application
 IDLE_GRACE_SECONDS = 5 * 60
 
 
-def build_app(comm_queue=None, host="127.0.0.1"):
-    """Bind a free port and run a fresh pgwidgets Application on it.
-
-    Picks the port inside this process (never released before
-    handing it to ``Application``), so there is no TOCTOU race with
-    any other process for the chosen port number.
-
-    Parameters
-    ----------
-    comm_queue : multiprocessing.Queue or None
-        Channel back to the parent process.  One message is sent
-        through it at startup, **before** ``app.run()`` blocks:
-
-        * ``("ready", ws_port, session_id, token)``
-
-        The child pre-creates a session (via
-        :meth:`Application.create_session`) and builds the UI on
-        it *before* any browser arrives — so by the time the parent
-        responds to the visitor, the credentials are already known
-        and the UI is already constructed.  The parent embeds the
-        credentials in the HTML, the browser sends them on the
-        WebSocket handshake, and pgwidgets-python's reconstruct
-        path replays the pre-built state onto the browser.
-
-    host : str
-        Interface to bind the WebSocket listener on.  ``"127.0.0.1"``
-        for loopback-only, ``"0.0.0.0"`` for all interfaces, or any
-        specific NIC IP.  Browsers reach the WebSocket via whatever
-        hostname Flask reports to them, which is independent of the
-        bind interface used here.
-
-    Blocks until the parent process kills the child (or the
-    interpreter exits).
-    """
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [pid %(process)d] "
-               "%(levelname)s %(name)s: %(message)s",
-    )
-    logger = logging.getLogger("flask-demo.app")
-
-    pg_app = PGFlaskApp(logger, host, comm_queue=comm_queue)
-    pg_app.build_app()
-    pg_app.run()
-
-
 class PGFlaskApp:
     """Subclass this and override build_gui()"""
 
@@ -257,6 +211,52 @@ class PGFlaskApp:
         top.show()
 
         # ---- end of user-editable area --------------------------
+
+
+def build_app(comm_queue=None, host="127.0.0.1"):
+    """Bind a free port and run a fresh pgwidgets Application on it.
+
+    Picks the port inside this process (never released before
+    handing it to ``Application``), so there is no TOCTOU race with
+    any other process for the chosen port number.
+
+    Parameters
+    ----------
+    comm_queue : multiprocessing.Queue or None
+        Channel back to the parent process.  One message is sent
+        through it at startup, **before** ``app.run()`` blocks:
+
+        * ``("ready", ws_port, session_id, token)``
+
+        The child pre-creates a session (via
+        :meth:`Application.create_session`) and builds the UI on
+        it *before* any browser arrives — so by the time the parent
+        responds to the visitor, the credentials are already known
+        and the UI is already constructed.  The parent embeds the
+        credentials in the HTML, the browser sends them on the
+        WebSocket handshake, and pgwidgets-python's reconstruct
+        path replays the pre-built state onto the browser.
+
+    host : str
+        Interface to bind the WebSocket listener on.  ``"127.0.0.1"``
+        for loopback-only, ``"0.0.0.0"`` for all interfaces, or any
+        specific NIC IP.  Browsers reach the WebSocket via whatever
+        hostname Flask reports to them, which is independent of the
+        bind interface used here.
+
+    Blocks until the parent process kills the child (or the
+    interpreter exits).
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [pid %(process)d] "
+               "%(levelname)s %(name)s: %(message)s",
+    )
+    logger = logging.getLogger("flask-demo.app")
+
+    pg_app = PGFlaskApp(logger, host, comm_queue=comm_queue)
+    pg_app.build_app()
+    pg_app.run()
 
 
 if __name__ == "__main__":

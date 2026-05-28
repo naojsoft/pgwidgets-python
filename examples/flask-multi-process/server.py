@@ -16,18 +16,34 @@ Architecture::
                                                          │   process 2 │
               (one child per request)               ws on 41922 ────────┘
 
-Run::
+Run (dev — Flask's built-in server)::
 
     pip install Flask pgwidgets-python
     python server.py
     # browse to http://localhost:5000/
 
-Each browser tab triggers a fresh per-visitor process.
+Run (production-ish — gunicorn + nginx)::
+
+    pip install Flask pgwidgets-python gunicorn
+    PGW_BIND_HOST=0.0.0.0 gunicorn -c gunicorn.conf.py server:app
+    # nginx reverse-proxies HTTP to gunicorn; see nginx.conf
+
+See README.md for the production deployment caveats — in
+particular the single-gunicorn-worker requirement (the
+``(session, token) -> child_process`` registry lives in worker-
+local memory) and the direct browser → child WebSocket flow that
+bypasses nginx.
+
+Each browser tab triggers a fresh per-visitor process; returning
+visitors whose URL still carries the session credentials route
+back to their original child for ``IDLE_GRACE_SECONDS``
+(``user_app.py``).
 """
 
 import argparse
 import logging
 import multiprocessing
+import os
 import queue as _queue_mod
 import sys
 import threading
@@ -36,6 +52,19 @@ from pathlib import Path
 import pgwidgets_js
 from flask import (Flask, render_template_string, request,
                    send_from_directory)
+
+# Force ``spawn`` for child processes.  The default on Linux is
+# ``fork``, which under gunicorn drags the worker's file
+# descriptors, signal handlers, and thread state into every child
+# — flaky.  ``spawn`` re-execs a fresh Python interpreter for each
+# child, which matches what the user_app module is written for
+# (it re-imports itself anyway, see the sys.path tweak below).
+# ``force=True`` makes this idempotent across imports / reloads.
+try:
+    multiprocessing.set_start_method("spawn", force=True)
+except RuntimeError:
+    # Already set by an earlier importer — fine.
+    pass
 
 # Make the sibling user_app.py importable regardless of the
 # directory ``server.py`` is launched from.  multiprocessing.spawn
@@ -57,10 +86,13 @@ PGWIDGETS_JS_ROOT = pgwidgets_js.get_static_path()
 app = Flask(__name__)
 log = logging.getLogger("flask-demo.server")
 
-# Bind interface for both Flask and the per-visitor WebSocket
-# children.  Set by main() from --host; module-level default so
-# ``flask run server`` / WSGI runners still work without CLI args.
-_BIND_HOST = "127.0.0.1"
+# Bind interface for the per-visitor WebSocket children.  Under
+# Flask's built-in server (``python server.py``), main() rewrites
+# this from --host.  Under gunicorn (or any other WSGI runner),
+# main() never runs — the standard way to configure here is the
+# ``PGW_BIND_HOST`` environment variable.  Default 127.0.0.1
+# keeps the demo loopback-only out of the box.
+_BIND_HOST = os.environ.get("PGW_BIND_HOST", "127.0.0.1")
 
 # Loaded HTML template — embeds the per-visitor WebSocket URL.
 # pgwidgets-js is served from the local pip-installed package via
@@ -334,6 +366,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     _BIND_HOST = args.host
+    # Also put it in the environment so any subprocess-spawned
+    # children that re-import server.py pick up the same value.
+    os.environ["PGW_BIND_HOST"] = args.host
 
     logging.basicConfig(
         level=logging.INFO,

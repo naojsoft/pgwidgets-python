@@ -132,6 +132,85 @@ used to reach Flask, so the same server can be reached via
 ``localhost``, by IP address, or by DNS name with no further
 configuration.
 
+## Production deployment (gunicorn + nginx)
+
+The bundled `gunicorn.conf.py` and `nginx.conf` upgrade the demo
+from Flask's dev server to a more production-shaped stack:
+
+```
+pip install gunicorn
+PGW_BIND_HOST=0.0.0.0 gunicorn -c gunicorn.conf.py server:app
+```
+
+Then point nginx at it — see the comments at the top of
+`nginx.conf` for placement (`sites-available` + symlink into
+`sites-enabled`, then `nginx -t && systemctl reload nginx`).
+
+### `PGW_BIND_HOST` (env var)
+
+Under gunicorn there's no CLI to pass `--host` through, so the
+per-visitor WebSocket bind interface is read from the
+`PGW_BIND_HOST` environment variable (default `127.0.0.1`).  Set
+it to `0.0.0.0` to accept connections from other machines.
+
+### Single gunicorn worker — non-negotiable
+
+`gunicorn.conf.py` sets `workers = 1`.  That's a *correctness*
+requirement, not a tuning knob: the `(session_id, token) →
+(port, Process)` registry lives in worker-local memory, so
+multiple workers would each maintain an independent registry
+and nginx would happily route a returning visitor's refresh to
+a worker that has never heard of them — spawning a duplicate
+child process every time.
+
+Concurrency at the Flask layer comes from the worker's thread
+pool (`gthread` + `threads = 16` by default).  The real work —
+the per-visitor pgwidgets sessions — runs in *separate
+subprocesses* anyway, so a single Flask worker isn't a
+bottleneck for typical demo workloads.  If you outgrow it, the
+right upgrade is to **externalise the registry**: a shared
+Redis hash, a SQLite file with file-locking, or a small RPC
+service.  That lets you raise `workers` to whatever you need.
+
+### nginx ↔ gunicorn ↔ child processes
+
+```
+                      ┌── 80/443 ──── nginx ─── 8000 ─── gunicorn ─── server.py (1 worker)
+   browser  ───┤                                                              │
+                      └── ws://host:<child-port>  ────────────────────────────┘
+                                                          (per-visitor subprocesses
+                                                           bound on ephemeral ports)
+```
+
+nginx reverse-proxies the HTML page and the `/pgwidgets-js/`
+static assets to gunicorn.  The per-visitor WebSocket
+connections **do not flow through nginx** — each child process
+binds its own ephemeral TCP port and the browser connects to it
+directly.  Two practical consequences:
+
+1. The application host must have the child's port range
+   reachable from wherever your users connect (public internet,
+   VPN, internal LAN, …).  `multiprocessing.Process` gets a
+   random ephemeral port from the OS by default; if you need a
+   bounded firewall range, change `user_app.py:build_app` to
+   bind from a fixed pool instead.
+2. TLS termination at nginx here covers HTTP only.  An HTTPS
+   page that tries to open a plain `ws://` WebSocket runs into
+   browser mixed-content blocking — so for HTTPS deployments
+   you'd usually want to route WebSockets through a TLS-
+   terminating proxy as well.  See the "WebSocket note" at the
+   bottom of `nginx.conf` for the rough shape of that change.
+
+### Subprocess start method
+
+`server.py` calls `multiprocessing.set_start_method("spawn",
+force=True)` at module load.  Forking child processes from a
+gunicorn worker drags the worker's file descriptors, signal
+handlers, and thread state into every child — flaky.  Spawn
+re-execs a fresh Python interpreter for each child, which is
+what `user_app.py` is written for anyway (it re-imports itself
+in the child).
+
 ## What the browser loads
 
 Each HTML response embeds the per-visitor WebSocket URL.  The
@@ -174,3 +253,10 @@ a hard path to that tree's `static/` directory.
   state in the parent over time, switch to a clear schema and
   document it (and consider replacing the `Queue` with a `Pipe` or
   a small RPC layer).
+- **Per-worker registry under gunicorn.** The
+  `(session_id, token) → (port, Process)` registry is in-memory
+  inside the gunicorn worker, so the bundled `gunicorn.conf.py`
+  pins `workers = 1`.  Raising the worker count silently breaks
+  session re-attach (every refresh routed to a fresh worker
+  spawns a duplicate child).  See "Production deployment" above
+  for the upgrade path (externalised registry).
