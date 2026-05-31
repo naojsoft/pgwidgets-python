@@ -83,6 +83,16 @@ ACTION_METHODS = {
     "sort_by_column", "set_optimal_column_widths",
     "select_path", "select_paths", "select_all",
     "select_cell", "select_cells", "clear_cell_selection",
+    # Per-cell / row / column / table colour overrides — the
+    # ``set_*`` naming would otherwise classify them as SETTERs,
+    # whose single-state-slot semantics can't represent the
+    # accumulated dict of overrides we actually keep.  ACTION
+    # dispatch sends each call straight through to the JS side,
+    # which holds the canonical state in its own maps.
+    "set_cell_color", "set_row_color", "set_column_color",
+    "set_table_color",
+    "clear_cell_color", "clear_row_color", "clear_column_color",
+    "clear_all_colors",
     # TextSource editing
     "insert_text", "delete_range", "create_tag", "remove_tag_def",
     "apply_tag", "remove_tag", "create_ref", "remove_ref",
