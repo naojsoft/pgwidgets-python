@@ -446,6 +446,11 @@ def _resolve_kwargs(method_name, param_names, args, kwargs):
     are bundled into a dict for that parameter (e.g.
     ``add_widget(child, title="Tab 1")`` becomes
     ``add_widget(child, {"title": "Tab 1"})``).
+
+    Skipped-positional kwargs are supported: a call like
+    ``set_color(fg='red')`` against ``param_names = ['bg', 'fg']``
+    fills the omitted ``bg`` slot with ``None`` (the JS-side
+    default) instead of erroring out.
     """
     if not kwargs:
         return args
@@ -456,7 +461,10 @@ def _resolve_kwargs(method_name, param_names, args, kwargs):
         if name in kwargs:
             merged.append(kwargs.pop(name))
         else:
-            break
+            # Leave a placeholder so subsequent kwargs can land in
+            # later positions.  The JS side reads omitted args as
+            # null / default, which matches ``None`` here.
+            merged.append(None)
     if kwargs and param_names and param_names[-1] == "options":
         # Bundle remaining kwargs into the options dict
         opts_idx = len(param_names) - 1
