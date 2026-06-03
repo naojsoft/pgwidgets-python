@@ -276,6 +276,14 @@ Flask
    if __name__ == "__main__":
        web.run(host="0.0.0.0", port=8000)
 
+For a production-style stack -- gunicorn workers, an nginx
+reverse proxy, one OS process per browser session, and
+session-aware routing -- see ``examples/flask-multi-process``.
+That example also demonstrates pre-warming the per-session
+worker with a Python-class user app before the browser opens
+its WebSocket, and reaping dead child workers so zombies don't
+accumulate.
+
 
 Apache
 ------

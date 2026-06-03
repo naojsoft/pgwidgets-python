@@ -1,6 +1,68 @@
 What's New
 ==========
 
+Recent changes — since ``v0.3.0``
+---------------------------------
+
+Flask multi-process example
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``examples/flask-multi-process`` is a new end-to-end demo of
+running pgwidgets-python behind Flask + gunicorn + nginx, with
+one OS process per browser session.  Highlights:
+
+* ``Application`` accepts ``ws_sock=`` and a session can be
+  pre-warmed in the worker process before the browser opens
+  its WebSocket -- the worker spawns, runs the user-app's
+  ``build_ui`` against an empty session, and then waits for
+  the WS handshake.
+* Session-aware routing so a Flask front-end can hand each
+  browser tab off to a dedicated worker by session ID.
+* Dead-child reaping (``waitpid(WNOHANG)``) to avoid zombie
+  worker processes piling up.
+* The user app is a Python class (``app.build_ui(session)``),
+  so worker pre-warming, multi-tab fanout, and reconstruction
+  reuse the same entry point.
+* The gunicorn / nginx layer serves the bundled pgwidgets-js
+  static assets from the pip-installed package (no separate
+  jsdelivr fetch needed).
+
+See ``examples/flask-multi-process/README.md`` for the full
+production stack walkthrough.
+
+file_browser: ``col_key`` on row-activated
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``pgwidgets.extras.file_browser`` matches the JS-side
+TreeView/TableView ``activated`` callback signature change:
+``FileBrowser._on_row_activated`` now receives ``col_key`` as
+the 4th argument, so handlers that double-click a file can see
+which column they hit.  Existing handlers (3-arg) keep working.
+
+``_resolve_kwargs``: skipped-positional kwargs
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The kwarg resolver used by every generated widget method now
+allows a caller to skip a positional argument and supply the
+next one by keyword.  For example, with a method declared as
+``set_color(bg=None, fg=None)``, callers may now write
+``label.set_color(fg="red")`` directly instead of
+``label.set_color(None, "red")``.  Previously the resolver
+would reject the keyword-only form for parameters that
+preceded any supplied keyword.
+
+method_types: TreeView colour + cell-selection methods classified as ACTION
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Internal: the four ``set_*_color`` overrides and the new
+``select_cell`` / ``select_cells`` / ``clear_cell_selection``
+methods are now ACTION-typed, so the wrapper layer dispatches
+each call straight through to the JS side instead of trying to
+collapse them into a single ``_state`` slot.  Matters for
+reconstruction-replay; rarely matters for application code.
+
+----
+
 Recent changes — since ``v0.2.3``
 ---------------------------------
 
