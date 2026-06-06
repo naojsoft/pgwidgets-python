@@ -16,6 +16,7 @@ import logging
 import mimetypes
 import signal
 import secrets
+import threading
 import traceback
 from http.server import SimpleHTTPRequestHandler
 from pathlib import Path
@@ -35,6 +36,15 @@ from pgwidgets.method_types import (
 from pgwidgets.async_.widget import Widget, build_all_widget_classes
 
 _CONCURRENCY_MODES = ("serialized", "per_session", "concurrent")
+
+
+# MIME types for the font formats register_font accepts.
+_FONT_MIME = {
+    ".ttf":   "font/ttf",
+    ".otf":   "font/otf",
+    ".woff":  "font/woff",
+    ".woff2": "font/woff2",
+}
 
 
 class _Namespace:
@@ -1428,6 +1438,13 @@ class Application:
         self._session_semaphore = None  # initialized in start()
         self._cb_lock = None         # for "serialized" mode
 
+        # Custom-font registry — see sync.application for details.
+        self._fonts = []
+        self._fonts_by_id = {}
+        self._next_font_id = 1
+        self._default_font = None
+        self._font_lock = threading.Lock()
+
         self._run_future = None      # set in run(), cancelled by close()
         self._httpd = None           # HTTP server instance
 
@@ -1492,6 +1509,104 @@ class Application:
             name = cls.__name__
         self._widget_classes[name] = cls
         return cls
+
+    # ----- Custom font registration ---------------------------
+    #
+    # API matches the sync backend; see ``sync.application`` for
+    # full docstrings.  The async variant schedules sends on the
+    # event loop via ``asyncio.run_coroutine_threadsafe`` so the
+    # method is safe to call from outside the loop (e.g. from the
+    # ``on_connect`` callback running on a worker thread).
+
+    def register_font(self, family, source, *,
+                      weight="normal", style="normal"):
+        if isinstance(source, (bytes, bytearray, memoryview)):
+            data = bytes(source)
+            mime = "font/ttf"
+        else:
+            p = Path(source)
+            data = p.read_bytes()
+            mime = _FONT_MIME.get(p.suffix.lower(), "font/ttf")
+        with self._font_lock:
+            font_id = self._next_font_id
+            self._next_font_id += 1
+            entry = {
+                "id": font_id,
+                "family": str(family),
+                "weight": str(weight),
+                "style": str(style),
+                "bytes": data,
+                "mime": mime,
+            }
+            self._fonts.append(entry)
+            self._fonts_by_id[font_id] = entry
+        msg = self._font_register_msg(entry)
+        self._broadcast_font_msg(msg)
+        return font_id
+
+    def set_default_font(self, family, *, size=None,
+                         weight=None, style=None):
+        if family is None:
+            self._default_font = None
+        else:
+            self._default_font = {
+                "family": str(family),
+                "size":   None if size is None else float(size),
+                "weight": None if weight is None else str(weight),
+                "style":  None if style is None else str(style),
+            }
+        self._broadcast_font_msg(self._font_default_msg())
+
+    def _font_register_msg(self, entry):
+        return {
+            "type": "register-font",
+            "id": entry["id"],
+            "family": entry["family"],
+            "weight": entry["weight"],
+            "style": entry["style"],
+            "url": f"/_pgwidgets/font/{entry['id']}",
+        }
+
+    def _font_default_msg(self):
+        return {
+            "type": "set-default-font",
+            "font": self._default_font,
+        }
+
+    def _broadcast_font_msg(self, msg):
+        loop = getattr(self, "_loop", None) or asyncio.get_event_loop()
+        for session in list(self._sessions.values()):
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    session._send(dict(msg)), loop)
+            except Exception:
+                pass
+
+    async def _replay_fonts_to_session(self, session):
+        """Push the registry + default font to a session before
+        any user code runs.  ``await``-ed from ``_on_session_open``
+        so the JS side has loaded faces (or at least dispatched
+        the load) before reconstruct / on_connect fires."""
+        with self._font_lock:
+            fonts = list(self._fonts)
+            default = self._default_font
+        for entry in fonts:
+            try:
+                await session._send(self._font_register_msg(entry))
+            except Exception:
+                pass
+        if default is not None:
+            try:
+                await session._send(self._font_default_msg())
+            except Exception:
+                pass
+
+    def _get_font_bytes(self, font_id):
+        with self._font_lock:
+            entry = self._fonts_by_id.get(font_id)
+        if entry is None:
+            return None, None
+        return entry["bytes"], entry["mime"]
 
     @property
     def sessions(self):
@@ -1603,6 +1718,10 @@ class Application:
 
         if is_reconnect:
             async def do_reconstruct():
+                # Replay the font registry before reconstruct() so
+                # any widget reconstructed with ``set_font(...)``
+                # finds the face already declared.
+                await self._replay_fonts_to_session(session)
                 self._logger.info(
                     f"Session {session.id}: reconstructing UI.")
                 session._reconstructing = True
@@ -1615,10 +1734,16 @@ class Application:
             asyncio.ensure_future(do_reconstruct())
         else:
             self._logger.info(f"Session {session.id} connected.")
-            if self._on_connect:
-                result = self._on_connect(session)
-                if hasattr(result, "__await__"):
-                    asyncio.ensure_future(result)
+            async def do_connect():
+                # Replay fonts before the user callback so any
+                # widget the user builds with ``set_font(family,
+                # ...)`` sees the face already declared.
+                await self._replay_fonts_to_session(session)
+                if self._on_connect:
+                    result = self._on_connect(session)
+                    if hasattr(result, "__await__"):
+                        await result
+            asyncio.ensure_future(do_connect())
 
         try:
             async for message in ws:
@@ -1699,6 +1824,7 @@ class Application:
         favicon_path = self._favicon_path
         ws_host = self._host
         ws_port = self._ws_port
+        app = self
 
         class Handler(SimpleHTTPRequestHandler):
             def __init__(self, *a, **kw):
@@ -1707,6 +1833,27 @@ class Application:
             def do_GET(self):
                 # Strip query string for path matching (e.g. /?session=1)
                 path = self.path.split("?")[0]
+                # Custom-font registry: see sync.application for
+                # the matching implementation.
+                if path.startswith("/_pgwidgets/font/"):
+                    try:
+                        font_id = int(path.rsplit("/", 1)[-1])
+                    except ValueError:
+                        self.send_error(404)
+                        return
+                    data, mime = app._get_font_bytes(font_id)
+                    if data is None:
+                        self.send_error(404)
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", mime)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header(
+                        "Cache-Control", "public, max-age=31536000, immutable")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 if path == "/" or path == "/index.html":
                     html = remote_html.read_text(encoding="utf-8")
                     inject = (

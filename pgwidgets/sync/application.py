@@ -130,6 +130,17 @@ def _run_queue_loop(cb_queue, stop_event, logger=None):
                 result_slot['event'].set()
 
 
+# MIME types for the font formats register_font accepts.  Used to
+# set the ``Content-Type`` header when the HTTP server delivers a
+# registered font to the browser.
+_FONT_MIME = {
+    ".ttf":   "font/ttf",
+    ".otf":   "font/otf",
+    ".woff":  "font/woff",
+    ".woff2": "font/woff2",
+}
+
+
 class Session:
     """
     A session that owns a widget tree and its associated state.
@@ -1642,6 +1653,17 @@ class Application:
         self._on_disconnect = None   # user callback: fn(session)
         self._cb_queue = queue.Queue()  # for "serialized" mode
 
+        # Custom-font registry.  Each entry is
+        # ``{id, family, weight, style, bytes, mime}``; ``id`` is a
+        # monotonic int used as the path component of the HTTP URL
+        # the browser fetches the font from.  ``_default_font`` is
+        # ``{family, size, weight, style}`` or ``None``.
+        self._fonts = []
+        self._fonts_by_id = {}
+        self._next_font_id = 1
+        self._default_font = None
+        self._font_lock = threading.Lock()
+
         self._loop = None
         self._shutdown = threading.Event()
         self._thread = None
@@ -1713,6 +1735,141 @@ class Application:
             name = cls.__name__
         self._widget_classes[name] = cls
         return cls
+
+    # ----- Custom font registration ---------------------------
+
+    def register_font(self, family, source, *,
+                      weight="normal", style="normal"):
+        """Register a custom font with the application.
+
+        Browsers receive a ``@font-face``-equivalent declaration
+        through the JS ``FontFace`` API, so any widget that does
+        ``set_font(family, ...)`` thereafter renders with this
+        face.  Multiple registrations for the same ``family`` but
+        different ``weight`` / ``style`` combine into a single
+        font family with multiple faces.
+
+        Parameters
+        ----------
+        family : str
+            CSS font-family name to expose to widgets.
+        source : str | os.PathLike | bytes | bytearray | memoryview
+            Path to a font file (``.ttf`` / ``.otf`` / ``.woff`` /
+            ``.woff2``) or raw font bytes.
+        weight : str
+            CSS ``font-weight`` -- ``'normal'``, ``'bold'``, or a
+            numeric string (``'100'`` ... ``'900'``).
+        style : str
+            CSS ``font-style`` -- ``'normal'``, ``'italic'``, or
+            ``'oblique'``.
+
+        Returns
+        -------
+        int
+            The registration id (rarely needed; callers usually
+            just refer to the font by ``family``).
+        """
+        if isinstance(source, (bytes, bytearray, memoryview)):
+            data = bytes(source)
+            mime = "font/ttf"
+        else:
+            p = Path(source)
+            data = p.read_bytes()
+            ext = p.suffix.lower()
+            mime = _FONT_MIME.get(ext, "font/ttf")
+        with self._font_lock:
+            font_id = self._next_font_id
+            self._next_font_id += 1
+            entry = {
+                "id": font_id,
+                "family": str(family),
+                "weight": str(weight),
+                "style": str(style),
+                "bytes": data,
+                "mime": mime,
+            }
+            self._fonts.append(entry)
+            self._fonts_by_id[font_id] = entry
+        # Push to any already-connected sessions so live UIs pick
+        # the font up without a reconnect.
+        msg = self._font_register_msg(entry)
+        for session in list(self._sessions.values()):
+            try:
+                session._send(msg)
+            except Exception:
+                pass
+        return font_id
+
+    def set_default_font(self, family, *, size=None,
+                         weight=None, style=None):
+        """Set the document-level default font.
+
+        Writes ``--pg-default-font-family`` / ``--pg-default-font-size``
+        / ``--pg-default-font-weight`` / ``--pg-default-font-style``
+        CSS variables on ``:root``; the base pgwidgets stylesheet
+        consumes these so any widget that hasn't been given an
+        explicit ``set_font(...)`` follows the default.
+
+        Pass ``family=None`` to clear the default and fall back to
+        the built-in stylesheet."""
+        if family is None:
+            self._default_font = None
+        else:
+            self._default_font = {
+                "family": str(family),
+                "size":   None if size is None else float(size),
+                "weight": None if weight is None else str(weight),
+                "style":  None if style is None else str(style),
+            }
+        msg = self._font_default_msg()
+        for session in list(self._sessions.values()):
+            try:
+                session._send(msg)
+            except Exception:
+                pass
+
+    def _font_register_msg(self, entry):
+        return {
+            "type": "register-font",
+            "id": entry["id"],
+            "family": entry["family"],
+            "weight": entry["weight"],
+            "style": entry["style"],
+            "url": f"/_pgwidgets/font/{entry['id']}",
+        }
+
+    def _font_default_msg(self):
+        return {
+            "type": "set-default-font",
+            "font": self._default_font,
+        }
+
+    def _replay_fonts_to_session(self, session):
+        """Push the full font registry + default font to a freshly
+        connected (or reconnecting) session before any user code
+        creates widgets.  Called from ``_on_session_open``."""
+        with self._font_lock:
+            fonts = list(self._fonts)
+            default = self._default_font
+        for entry in fonts:
+            try:
+                session._send(self._font_register_msg(entry))
+            except Exception:
+                pass
+        if default is not None:
+            try:
+                session._send(self._font_default_msg())
+            except Exception:
+                pass
+
+    def _get_font_bytes(self, font_id):
+        """Return ``(bytes, mime)`` for a registered font, or
+        ``(None, None)`` if unknown.  Called by the HTTP handler."""
+        with self._font_lock:
+            entry = self._fonts_by_id.get(font_id)
+        if entry is None:
+            return None, None
+        return entry["bytes"], entry["mime"]
 
     def start(self):
         """Start the WebSocket server (and HTTP server if enabled).
@@ -1836,6 +1993,10 @@ class Application:
             # because _send() blocks with event.wait() while the event
             # loop that must process ws.send() is also blocked.
             def do_reconstruct():
+                # Replay the font registry before reconstruct() so any
+                # widget reconstructed with ``set_font(...)`` finds the
+                # face already declared.
+                self._replay_fonts_to_session(session)
                 self._logger.info(
                     f"Session {session.id}: reconstructing UI.")
                 session._reconstructing = True
@@ -1848,8 +2009,14 @@ class Application:
             self._dispatch(session, do_reconstruct, ())
         else:
             self._logger.info(f"Session {session.id} connected.")
-            if self._on_connect:
-                self._dispatch(session, self._on_connect, (session,))
+            def do_connect():
+                # Replay fonts before the user callback so any widget
+                # the user builds with ``set_font(family, ...)`` sees
+                # the face already declared.
+                self._replay_fonts_to_session(session)
+                if self._on_connect:
+                    self._on_connect(session)
+            self._dispatch(session, do_connect, ())
 
         try:
             async for message in ws:
@@ -1942,6 +2109,7 @@ class Application:
         favicon_path = self._favicon_path
         ws_host = self._host
         ws_port = self._ws_port
+        app = self
 
         class Handler(http.server.SimpleHTTPRequestHandler):
             def __init__(self, *args, **kwargs):
@@ -1951,6 +2119,31 @@ class Application:
                 # serve remote.html at the root, with WS URL injected
                 # Strip query string for path matching (e.g. /?session=1)
                 path = self.path.split("?")[0]
+                # Custom-font registry: /_pgwidgets/font/<id> serves
+                # the bytes the app registered via ``register_font``.
+                # ``Cache-Control: immutable`` is safe because the
+                # registry assigns a fresh id on every call -- the
+                # URL is content-stable for the lifetime of the
+                # registration.
+                if path.startswith("/_pgwidgets/font/"):
+                    try:
+                        font_id = int(path.rsplit("/", 1)[-1])
+                    except ValueError:
+                        self.send_error(404)
+                        return
+                    data, mime = app._get_font_bytes(font_id)
+                    if data is None:
+                        self.send_error(404)
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", mime)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header(
+                        "Cache-Control", "public, max-age=31536000, immutable")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 if path == "/" or path == "/index.html":
                     html = remote_html.read_text(encoding="utf-8")
                     inject = (
