@@ -56,6 +56,29 @@ Running
 
 ``await app.close()`` shuts down all sessions and causes ``run()`` to return.
 
+Custom fonts
+~~~~~~~~~~~~
+
+Same ``register_font`` / ``set_default_font`` API as the sync
+backend (see :doc:`sync`); both are plain sync methods that
+schedule the broadcast onto the event loop via
+``asyncio.run_coroutine_threadsafe``, so they're safe to call
+from both inside and outside the loop.
+
+.. code-block:: python
+
+   app.register_font('Roboto', '/path/to/Roboto-Regular.ttf')
+   app.register_font('Roboto', '/path/to/Roboto-Bold.ttf',
+                     weight='bold')
+   app.set_default_font('Roboto', size=13)
+
+Bytes are kept in memory on the ``Application`` and served by
+the built-in HTTP server at ``/_pgwidgets/font/<id>``.  Fonts
+are replayed to every new and reconnecting session before
+``on_connect`` / ``reconstruct`` runs, so widgets reconstructed
+with ``set_font(family, ...)`` always find the face already
+declared.
+
 Session
 -------
 

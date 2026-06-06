@@ -4,6 +4,53 @@ What's New
 Recent changes — since ``v0.3.0``
 ---------------------------------
 
+Custom fonts: ``Application.register_font`` / ``set_default_font``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Two new methods on ``Application`` let the Python side ship
+custom font files to the browser and apply a document-wide
+default font.
+
+.. code-block:: python
+
+   app.register_font('Roboto', '/path/to/Roboto-Regular.ttf')
+   app.register_font('Roboto', '/path/to/Roboto-Bold.ttf',
+                     weight='bold')
+   app.set_default_font('Roboto', size=13)
+
+* ``register_font(family, source, *, weight, style)`` -- stores
+  the font bytes in an in-memory registry keyed by a monotonic
+  id; the built-in HTTP server exposes them at
+  ``/_pgwidgets/font/<id>`` with ``Cache-Control: immutable``.
+  Accepts paths (``str`` / ``os.PathLike``) or raw ``bytes``.
+* ``set_default_font(family, *, size, weight, style)`` --
+  writes ``--pg-default-font-{family,size,weight,style}`` CSS
+  variables on ``:root`` via a managed ``<style>`` element on
+  the JS side.  The base widget stylesheet consumes them with
+  safe fallbacks so apps that never opt in see no change in
+  rendering.
+
+Both methods broadcast to every connected session immediately
+and replay the entire registry to every new / reconnecting
+session before ``on_connect`` / ``reconstruct`` runs.  That
+guarantees a widget that's reconstructed with
+``set_font(family, ...)`` always finds the face already
+declared on the JS side, even after a full page reload.
+
+The JS handler normalises descriptive TTF weight names
+(``thin``, ``light``, ``medium``, ``semibold``, ``extrabold``,
+``black``, ``heavy``, ...) to the numeric CSS values per the
+CSS Fonts spec, so a font registry that knows weights by their
+metadata name (e.g. Ginga's ``font_asst``) can pass weights
+straight through.
+
+The matching sync- and async-backend API are identical; the
+async variant schedules sends via
+``asyncio.run_coroutine_threadsafe`` so ``register_font`` is
+callable from outside the event loop.
+
+See :doc:`sync` / :doc:`async` for the full API description.
+
 Flask multi-process example
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

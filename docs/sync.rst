@@ -71,6 +71,52 @@ Running
 
 ``app.close()`` shuts down all sessions and stops the servers.
 
+Custom fonts
+~~~~~~~~~~~~
+
+Two methods on ``Application`` push custom font files to the
+browser and apply a document-wide default font.  Both broadcast
+to every connected session immediately, and replay the entire
+registry + default font to every new / reconnecting session
+*before* ``on_connect`` / ``reconstruct`` runs -- so any widget
+that takes ``set_font(family, ...)`` always finds the face
+already declared on the JS side.
+
+.. code-block:: python
+
+   # Register one or more faces for a family
+   app.register_font('Roboto', '/path/to/Roboto-Regular.ttf')
+   app.register_font('Roboto', '/path/to/Roboto-Bold.ttf',
+                     weight='bold')
+   app.register_font('Roboto', '/path/to/Roboto-Italic.ttf',
+                     style='italic')
+
+   # Apply a document-wide default
+   app.set_default_font('Roboto', size=13)
+
+   # Later use it on a single widget (or anywhere CSS sees it)
+   label.set_font('Roboto', 14)
+
+* ``source`` is a path (``str`` / ``os.PathLike``) or raw
+  ``bytes``.  Accepted formats: ``.ttf``, ``.otf``, ``.woff``,
+  ``.woff2`` -- the Content-Type is set from the extension.
+* ``weight`` accepts CSS keywords, numeric strings, *and*
+  common TTF metadata names (``thin``, ``light``, ``medium``,
+  ``semibold``, ``extrabold``, ``black``, ``heavy``, etc.) --
+  the JS handler normalises descriptive names to numeric CSS
+  values per the CSS Fonts spec.
+* ``style`` accepts ``'normal'``, ``'italic'``, or
+  ``'oblique'``; synonyms (``'roman'``, ``'slanted'``) are
+  normalised too.
+* ``set_default_font(family=None)`` clears the override.
+
+Bytes are served from ``/_pgwidgets/font/<id>`` by the built-in
+HTTP server with ``Cache-Control: immutable``; behind Flask /
+nginx the same route is served from the Python process.
+
+See also the JS-side write-up at :ref:`custom-fonts` in the
+pgwidgets-js documentation.
+
 Session
 -------
 
