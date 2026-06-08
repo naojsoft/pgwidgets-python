@@ -1788,8 +1788,14 @@ class Application:
             The newly created session.
         """
         if session_id is None:
+            # skip ids already taken by explicitly-created sessions
+            # (e.g. a pre-created default session) so we never
+            # silently overwrite an existing session
             session_id = self._next_session_id
             self._next_session_id += 1
+            while session_id in self._sessions:
+                session_id = self._next_session_id
+                self._next_session_id += 1
         elif session_id in self._sessions:
             # If the existing session was auto-created by a browser
             # reconnect with the same token, return it so the user's
@@ -1954,12 +1960,14 @@ class Application:
 
         In the async API, callbacks are dispatched by the asyncio event
         loop directly, so this simply yields control for the requested
-        duration.
+        duration.  A *timeout* of ``0`` yields once (a non-blocking drain
+        of ready callbacks), matching the sync API's contract.
 
         Parameters
         ----------
         timeout : float
             Seconds to yield to the event loop (default 0.1).
+            Use ``0`` for a single non-blocking yield.
         """
         await asyncio.sleep(timeout)
 

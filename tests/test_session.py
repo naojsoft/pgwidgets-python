@@ -6,7 +6,9 @@ tokens, manage multiple connections, handle graceful no-connection
 operation, and can be destroyed.
 """
 
+import queue
 import threading
+import time
 from unittest.mock import MagicMock, AsyncMock
 
 from pgwidgets.sync.application import Application, Session
@@ -58,6 +60,18 @@ class TestSessionCreation:
         s2 = app.create_session()
         assert s1.id == 1
         assert s2.id == 2
+
+    def test_create_session_auto_id_skips_existing(self):
+        # Mirrors the Ginga pgw Application pattern: a default session is
+        # created with an explicit id, then more are auto-allocated.  An
+        # auto-allocated id must not collide with / silently overwrite the
+        # explicitly-created one.
+        app = _make_app()
+        default = app.create_session(session_id=1)
+        extra = app.create_session()        # auto-allocated
+        assert extra.id != default.id
+        assert app._sessions[default.id] is default   # not overwritten
+        assert app._sessions[extra.id] is extra
 
     def test_create_session_explicit_id(self):
         app = _make_app()
@@ -375,3 +389,39 @@ class TestCallbackSuppression:
         types = [m["type"] for m in messages]
         assert types[0] == "reconstruct-start"
         assert types[-1] == "reconstruct-end"
+
+
+class TestProcessEventsDrain:
+    """Test the non-blocking drain mode of process_events (timeout=0)."""
+
+    def _serial_app(self):
+        app = _make_app(concurrency="serialized")
+        app._cb_queue = queue.Queue()
+        app._shutdown = threading.Event()
+        return app
+
+    def test_zero_drains_all_without_blocking(self):
+        app = self._serial_app()
+        ran = []
+        for i in range(3):
+            app._cb_queue.put((lambda i=i: ran.append(i), (), {}, None))
+        start = time.monotonic()
+        app.process_events(0)
+        elapsed = time.monotonic() - start
+        assert ran == [0, 1, 2]
+        assert app._cb_queue.empty()
+        assert elapsed < 0.05   # returned without blocking
+
+    def test_zero_empty_queue_returns_immediately(self):
+        app = self._serial_app()
+        start = time.monotonic()
+        app.process_events(0)   # nothing queued
+        assert time.monotonic() - start < 0.05
+
+    def test_zero_propagates_result_slot(self):
+        app = self._serial_app()
+        slot = {"event": threading.Event()}
+        app._cb_queue.put((lambda: 42, (), {}, slot))
+        app.process_events(0)
+        assert slot["value"] == 42
+        assert slot["event"].is_set()

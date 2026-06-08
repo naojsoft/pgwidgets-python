@@ -2062,8 +2062,14 @@ class Application:
         """
         with self._session_lock:
             if session_id is None:
+                # skip ids already taken by explicitly-created sessions
+                # (e.g. a pre-created default session) so we never
+                # silently overwrite an existing session
                 session_id = self._next_session_id
                 self._next_session_id += 1
+                while session_id in self._sessions:
+                    session_id = self._next_session_id
+                    self._next_session_id += 1
             elif session_id in self._sessions:
                 # If the existing session was auto-created by a browser
                 # reconnect with the same token, return it so the user's
@@ -2279,22 +2285,35 @@ class Application:
         ``concurrent`` modes, callbacks already run on their own threads
         so this method simply yields control briefly.
 
+        A *timeout* of ``0`` drains every callback currently queued and
+        returns immediately without blocking -- useful when pumping from
+        within another event loop (e.g. a Jupyter kernel's asyncio loop).
+
         Parameters
         ----------
         timeout : float
             Maximum seconds to spend processing events (default 0.1).
+            Use ``0`` for a non-blocking drain of the pending queue.
         """
         if self._concurrency == "serialized":
+            non_blocking = (timeout == 0)
             deadline = time.monotonic() + timeout
             while not self._shutdown.is_set():
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                try:
-                    handler, args, kwargs, result_slot = \
-                        self._cb_queue.get(timeout=min(remaining, 0.5))
-                except queue.Empty:
-                    continue
+                if non_blocking:
+                    try:
+                        handler, args, kwargs, result_slot = \
+                            self._cb_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                else:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        handler, args, kwargs, result_slot = \
+                            self._cb_queue.get(timeout=min(remaining, 0.5))
+                    except queue.Empty:
+                        continue
                 try:
                     rv = handler(*args, **kwargs)
                     if result_slot is not None:
