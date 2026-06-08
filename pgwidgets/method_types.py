@@ -56,7 +56,7 @@ JS_ONLY_METHODS = {
     # ComboBox
     "get_alpha",
     # Container
-    "num_children",
+    "num_children", "is_container",
     # TabWidget lookups
     "get_tab_id", "get_child", "index_of",
     # MDIWidget
