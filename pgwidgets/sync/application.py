@@ -1828,6 +1828,20 @@ class Application:
             except Exception:
                 pass
 
+    def open_url(self, url):
+        """Ask the connected browser(s) to open *url* in a new tab/window.
+
+        Fire-and-forget app-level command (mirrors set_default_font's
+        per-session send).  This opens the link in the *user's* browser
+        rather than on the host running Python.
+        """
+        msg = {"type": "open-url", "url": str(url)}
+        for session in list(self._sessions.values()):
+            try:
+                session._send(msg)
+            except Exception:
+                pass
+
     def _font_register_msg(self, entry):
         return {
             "type": "register-font",

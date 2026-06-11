@@ -1557,6 +1557,15 @@ class Application:
             }
         self._broadcast_font_msg(self._font_default_msg())
 
+    def open_url(self, url):
+        """Ask the connected browser(s) to open *url* in a new tab/window.
+
+        Fire-and-forget app-level command; opens the link in the *user's*
+        browser rather than on the host running Python.  (Reuses the
+        generic per-session broadcast helper.)
+        """
+        self._broadcast_font_msg({"type": "open-url", "url": str(url)})
+
     def _font_register_msg(self, entry):
         return {
             "type": "register-font",
