@@ -631,6 +631,7 @@ Hierarchical tree/list display.
   ``select_all(state)``,
   ``set_column_width(col_key, width)``,
   ``set_optimal_column_widths()``,
+  ``set_row_spacing(px)``, ``set_column_spacing(px)``,
   ``sort_by_column(col_key, ascending)``, ``scroll_to_path(path)``,
   ``scroll_to_end()``, ``get_column_count()``, ``get_row_count()``,
   ``set_show_grid(tf)``, ``set_show_row_numbers(tf)``,
@@ -814,6 +815,11 @@ Browser file open/save dialog.
 
 Menus and Toolbars
 ------------------
+
+``MenuBar``, ``Menu`` and ``ToolBar`` are container widgets: the menu
+actions, submenus and toolbar items they hold are reported by
+``get_children()`` / ``num_children()`` (separators and spacers
+excluded).
 
 MenuBar
 ~~~~~~~

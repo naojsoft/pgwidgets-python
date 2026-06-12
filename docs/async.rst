@@ -79,6 +79,10 @@ are replayed to every new and reconnecting session before
 with ``set_font(family, ...)`` always find the face already
 declared.
 
+``open_url(url)`` is also available (same as the sync backend; see
+:doc:`sync`) -- it asks the connected browser(s) to open ``url`` in a
+new tab via ``window.open``.
+
 Session
 -------
 

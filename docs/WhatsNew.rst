@@ -4,6 +4,40 @@ What's New
 Recent changes — since ``v0.3.0``
 ---------------------------------
 
+``Application.open_url``
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A new method asks the connected browser(s) to open a URL in a new
+tab/window (``window.open``):
+
+.. code-block:: python
+
+   app.open_url('https://example.com/')
+
+This opens the link in the *user's* browser rather than on the host
+running Python.  It is a fire-and-forget, per-session broadcast (like
+``set_default_font``) and is available on both the sync and async
+``Application``.  (Note: a browser popup blocker may suppress it if
+the originating user-activation has lapsed.)
+
+Containers report their children: ``get_children``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``Frame``, ``Expander``, ``TopLevel`` and ``Page`` (single-child
+containers) and the menu / toolbar widgets ``Menu``, ``MenuBar`` and
+``ToolBar`` are now container widgets, so their generated wrappers
+expose the container method set -- ``get_children`` / ``num_children``
+/ ``remove`` / ``remove_widget`` / ``remove_all``.  ``get_children()``
+returns the contained widgets (a 0- or 1-element list for the
+single-child containers; the menu actions / submenus / toolbar items
+for the menu/toolbar widgets).
+
+TreeView / TableView: ``set_row_spacing`` / ``set_column_spacing``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Two new methods set the vertical (row) and horizontal (column) cell
+padding (in pixels).  ``set_row_spacing(0)`` yields tight rows.
+
 Custom fonts: ``Application.register_font`` / ``set_default_font``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

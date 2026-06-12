@@ -117,6 +117,19 @@ nginx the same route is served from the Python process.
 See also the JS-side write-up at :ref:`custom-fonts` in the
 pgwidgets-js documentation.
 
+Opening a URL in the browser
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   app.open_url('https://example.com/')
+
+``open_url(url)`` asks the connected browser(s) to open ``url`` in a
+new tab/window (``window.open``) -- i.e. in the *user's* browser, not
+on the host running Python.  It is a fire-and-forget, per-session
+broadcast.  (A browser popup blocker may suppress it if the
+user-activation from the originating click has already lapsed.)
+
 Session
 -------
 
