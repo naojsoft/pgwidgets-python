@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="pgwidgets/icons/pgw-python-logo.png" alt="pgwidgets-python logo" width="500">
+</p>
+
 # pgwidgets — Python Bindings
 
 Python bindings for the [pgwidgets](https://github.com/naojsoft/pgwidgets-js)

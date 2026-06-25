@@ -46,3 +46,6 @@ local_scheme = "node-and-date"
 
 [tool.setuptools.packages.find]
 include = ["pgwidgets*"]
+
+[tool.setuptools.package-data]
+pgwidgets = ["icons/*"]

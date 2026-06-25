@@ -17,6 +17,8 @@ exclude_patterns = ["_build"]
 # -- HTML output --
 html_theme = "furo"
 html_title = "pgwidgets-python"
+# project logo (single source: the package's icons/ data folder)
+html_logo = "../pgwidgets/icons/pgw-python-logo.png"
 
 # -- autodoc --
 autodoc_member_order = "bysource"
