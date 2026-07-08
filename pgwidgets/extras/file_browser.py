@@ -209,6 +209,10 @@ class FileBrowser(Callbacks):
 
     # ── Public API ──────────────────────────────────────────────
 
+    def set_title(self, title):
+        """Set the dialog's title bar text."""
+        self._dialog.set_title(title)
+
     def set_mode(self, mode):
         """Set the selection mode: 'file', 'files', 'directory', 'save'."""
         self._mode = mode
