@@ -62,7 +62,8 @@ JS_ONLY_METHODS = {
     # MDIWidget
     "get_subwin", "get_subwindows", "get_configuration",
     "get_child_size", "get_child_position",
-    # Button icon (set_icon is an action, so get_icon must round-trip)
+    # Button icon: set_icon stores state (so it reconstructs); get_icon
+    # reads the live browser value, so it round-trips.
     "get_icon",
 }
 
@@ -121,8 +122,6 @@ ACTION_METHODS = {
     "set_minimum_size",
     # TreeView per-column
     "set_column_width", "set_column_editable",
-    # TextSource per-line
-    "set_icon",
 }
 
 # Setter methods that DON'T follow the set_* naming convention.

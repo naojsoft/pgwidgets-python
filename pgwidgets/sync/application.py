@@ -1399,6 +1399,18 @@ class Session:
         #    callbacks transferred by _transfer_proxy during step 3.
         self._reregister_callbacks(widget)
 
+        # 6. Widgets with a Python-authoritative model (TextSource) push
+        #    their full model state (text, tags, cursor) to the freshly
+        #    (re)connected browser.  Guard it: a failure here must not abort
+        #    reconstruction of the whole widget tree.
+        if hasattr(widget, "_reconstruct_model"):
+            try:
+                widget._reconstruct_model()
+            except Exception:
+                self._logger.error(
+                    "TextSource model reconstruction failed for wid=%s",
+                    getattr(widget, "_wid", "?"), exc_info=True)
+
     def _reregister_callbacks(self, widget):
         """Re-register user callbacks and auto-sync listeners on *widget*.
 

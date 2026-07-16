@@ -965,4 +965,9 @@ def build_all_widget_classes():
     classes = {}
     for js_class, defn in WIDGETS.items():
         classes[js_class] = build_widget_class(js_class, defn)
+    # TextSource is hand-written (Python-authoritative local text model)
+    # rather than generated -- see pgwidgets.sync.text_source.  Deferred
+    # import avoids a circular import at module load.
+    from pgwidgets.sync.text_source import TextSource as _TextSource
+    classes['TextSource'] = _TextSource
     return classes
