@@ -108,7 +108,7 @@ ACTION_METHODS = {
     # Timer
     "start", "cancel", "set", "cond_set",
     # Table/Tree row-level modifications (tracked via bulk set_data)
-    "add_item", "remove_item", "update_tree", "remove_items",
+    "add_item", "remove_item", "update_tree", "remove_items", "delete_tree",
     "insert_row", "append_row", "delete_row",
     "insert_column", "append_column", "delete_column",
     "set_cell",
