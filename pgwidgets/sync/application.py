@@ -524,6 +524,14 @@ class Session:
                         widget._state[spec[0]] = tuple(args)
                     else:
                         widget._state[spec] = args[0]
+            # ComboBox: a value committed with Enter in the browser may be
+            # a new entry the browser appended to its list; mirror that
+            # append so our _items (and thus get_index) stays consistent.
+            if (widget._js_class == "ComboBox" and action == "activated"
+                    and len(args) >= 2):
+                items = widget._state.setdefault("_items", [])
+                if args[1] not in items:
+                    items.append(args[1])
         # Dialog autoclose: the JS side auto-hides when a button is
         # clicked.  Sync that to Python so reconstruction doesn't
         # re-show a dialog that was autoclosed.

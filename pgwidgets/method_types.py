@@ -419,7 +419,34 @@ BINARY_STATE_KEYS = {
 }
 
 
+def _combobox_get_index(self):
+    """Index of the item matching the current text, or -1 when the text is
+    not one of the offerings (e.g. a value typed into an editable combo box
+    but not yet committed with Enter).  Mirrors the JS get_index(), which
+    is items.indexOf(input value), and stays consistent with get_text()
+    (the cached entry text, kept live by the 'modified' callback)."""
+    items = self._state.get("_items", [])
+    try:
+        return items.index(self._state.get("text", ""))
+    except ValueError:
+        return -1
+
+
+def _combobox_set_index(self, idx):
+    """Select the item at *idx*, keeping the cached text consistent with
+    the index so get_text() agrees with get_index() after a programmatic
+    change (the generic setter would leave 'text' stale)."""
+    items = self._state.get("_items", [])
+    if 0 <= idx < len(items):
+        self._state["text"] = items[idx]
+    self._state["index"] = idx
+    self._user_set_state.add("index")
+    return self._call("set_index", idx)
+
+
 CUSTOM_METHODS = {
+    ("ComboBox", "get_index"): _combobox_get_index,
+    ("ComboBox", "set_index"): _combobox_set_index,
     ("TabWidget", "index_to_widget"): _index_to_widget,
     ("TabWidget", "index_of"): _index_of,
     ("StackWidget", "index_to_widget"): _index_to_widget,
