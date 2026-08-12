@@ -11,6 +11,7 @@ import base64
 import mimetypes
 import os
 
+from pgwidgets import tree_model
 from pgwidgets.defs import WIDGETS, CALLBACK_METHODS, WIDGET_METHODS, CONTAINER_METHODS
 from pgwidgets.method_types import (
     classify_method, SETTER, GETTER, CHILD, ACTION, JS_ONLY,
@@ -278,6 +279,15 @@ class Widget:
     def session(self):
         """The Session this widget belongs to."""
         return self._session
+
+    def batch(self):
+        """Convenience for ``widget.session.batch()``.
+
+        Batching is per session, not per widget, so updates to other
+        widgets made inside the block ride along in the same message.
+        Used with ``async with``.
+        """
+        return self._session.batch()
 
     @property
     def app(self):
@@ -773,7 +783,8 @@ def _add_tree_view_methods(attrs, all_methods):
             if path is not None:
                 key = tuple(path) if isinstance(path, list) else path
                 expanded = self._state.setdefault("_expanded_paths", set())
-                expanded.add(key)
+                if expanded != "_all":
+                    expanded.add(key)
                 collapsed = self._state.get("_collapsed_paths")
                 if collapsed is not None and collapsed != "_all":
                     collapsed.discard(key)
@@ -789,7 +800,7 @@ def _add_tree_view_methods(attrs, all_methods):
             if path is not None:
                 key = tuple(path) if isinstance(path, list) else path
                 expanded = self._state.get("_expanded_paths")
-                if expanded is not None:
+                if expanded is not None and expanded != "_all":
                     expanded.discard(key)
                 collapsed = self._state.setdefault("_collapsed_paths", set())
                 if collapsed != "_all":
@@ -813,6 +824,429 @@ def _add_tree_view_methods(attrs, all_methods):
             return await self._call("collapse_all")
         collapse_all_method.__name__ = "collapse_all"
         attrs["collapse_all"] = collapse_all_method
+
+    _add_tree_model_methods(attrs, all_methods)
+
+
+# ---- generated from sync/widget.py by tools/sync_async_tree_model.py ----
+def _pad(args, n):
+    """Pad a call's positional args out to `n` with None, so a partially
+    specified call still lands in the right state slots."""
+    args = list(args)
+    while len(args) < n:
+        args.append(None)
+    return tuple(args)
+
+
+def _style_path(path):
+    """Hashable form of a path, for use as a style-map key."""
+    return tuple(path) if isinstance(path, list) else path
+
+
+def _model_rows(widget):
+    """The flat row model in _state, whichever bulk setter filled it."""
+    for key in ("rows", "data"):
+        rows = widget._state.get(key)
+        if isinstance(rows, list):
+            return rows
+    return None
+
+
+def _drop_row_styles(widget):
+    """The JS clear() that precedes a bulk load empties the per-cell and
+    per-row style maps but keeps the column / table layers."""
+    widget._state.pop("_cell_styles", None)
+    widget._state.pop("_row_styles", None)
+
+
+def _add_tree_model_methods(attrs, all_methods):
+    """Override the tree/table mutators so they maintain the Python-side
+    model (see :mod:`pgwidgets.tree_model`).
+
+    Python is the source of truth: the browser can be rebuilt at any time
+    from ``_state``, so every mutation has to be reflected there or it is
+    lost on the next reconnect.  The bulk setters additionally deep-copy,
+    so a caller that keeps editing the structure it passed in cannot
+    corrupt the model behind our back.
+    """
+    # --- bulk setters: store a private copy, reset row-level styles ---
+    for name, state_key in (("set_tree", "tree"), ("set_data", "data"),
+                            ("set_rows", "rows")):
+        if name not in all_methods:
+            continue
+
+        def make_bulk(mn, key, pn):
+            async def method(self, *args, **kwargs):
+                args = _resolve_kwargs(mn, pn, args, kwargs)
+                self._state[key] = tree_model.copy_tree(
+                    args[0] if args else None)
+                _drop_row_styles(self)
+                return await self._call(mn, *args)
+            method.__name__ = mn
+            return method
+        attrs[name] = make_bulk(name, state_key, all_methods[name])
+
+    # --- per-cell writes fold into the model ---
+    if "set_cell" in all_methods:
+        param_names = all_methods["set_cell"]
+
+        async def set_cell_method(self, *args, **kwargs):
+            args = _resolve_kwargs("set_cell", param_names, args, kwargs)
+            if len(args) >= 3:
+                where, col, value = args[0], args[1], args[2]
+                tree = self._state.get("tree")
+                if isinstance(tree, dict):
+                    tree_model.set_cell(tree, where, col, value)
+                else:
+                    rows = _model_rows(self)
+                    if rows is not None:
+                        tree_model.row_set_cell(
+                            rows, self._state.get("columns"),
+                            where, col, value)
+            return await self._call("set_cell", *args)
+        set_cell_method.__name__ = "set_cell"
+        attrs["set_cell"] = set_cell_method
+
+    # --- structural tree edits ---
+    if "add_item" in all_methods:
+        param_names = all_methods["add_item"]
+
+        async def add_item_method(self, *args, **kwargs):
+            args = _resolve_kwargs("add_item", param_names, args, kwargs)
+            tree = self._state.get("tree")
+            if isinstance(tree, dict) and len(args) >= 3:
+                tree_model.add_item(tree, args[0], args[1], args[2])
+            return await self._call("add_item", *args)
+        add_item_method.__name__ = "add_item"
+        attrs["add_item"] = add_item_method
+
+    if "remove_item" in all_methods:
+        param_names = all_methods["remove_item"]
+
+        async def remove_item_method(self, *args, **kwargs):
+            args = _resolve_kwargs("remove_item", param_names, args, kwargs)
+            tree = self._state.get("tree")
+            if isinstance(tree, dict) and args:
+                tree_model.remove_item(tree, args[0])
+            return await self._call("remove_item", *args)
+        remove_item_method.__name__ = "remove_item"
+        attrs["remove_item"] = remove_item_method
+
+    if "remove_items" in all_methods:
+        param_names = all_methods["remove_items"]
+
+        async def remove_items_method(self, *args, **kwargs):
+            args = _resolve_kwargs("remove_items", param_names, args, kwargs)
+            tree = self._state.get("tree")
+            if isinstance(tree, dict) and args:
+                tree_model.remove_items(tree, args[0])
+            return await self._call("remove_items", *args)
+        remove_items_method.__name__ = "remove_items"
+        attrs["remove_items"] = remove_items_method
+
+    if "add_tree" in all_methods:
+        param_names = all_methods["add_tree"]
+
+        async def add_tree_method(self, *args, **kwargs):
+            args = _resolve_kwargs("add_tree", param_names, args, kwargs)
+            args = _pad(args, 2)
+            tree = self._state.get("tree")
+            if isinstance(tree, dict):
+                tree_model.merge_tree(tree, args[0], args[1])
+            elif isinstance(args[0], dict) and args[1] in (None, [], ()):
+                # merging into an empty widget: the merge *is* the tree
+                self._state["tree"] = tree_model.copy_tree(args[0])
+            return await self._call("add_tree", *args)
+        add_tree_method.__name__ = "add_tree"
+        attrs["add_tree"] = add_tree_method
+
+    if "delete_tree" in all_methods:
+        param_names = all_methods["delete_tree"]
+
+        async def delete_tree_method(self, *args, **kwargs):
+            args = _resolve_kwargs("delete_tree", param_names, args, kwargs)
+            args = _pad(args, 2)
+            tree = self._state.get("tree")
+            prune = True if args[1] is None else bool(args[1])
+            if isinstance(tree, dict):
+                tree_model.delete_tree(tree, args[0], prune)
+            return await self._call("delete_tree", *args)
+        delete_tree_method.__name__ = "delete_tree"
+        attrs["delete_tree"] = delete_tree_method
+
+    if "update_tree" in all_methods:
+        param_names = all_methods["update_tree"]
+
+        async def update_tree_method(self, *args, **kwargs):
+            """Bring the tree to `tree`, sending only what changed.
+
+            The browser's own ``update_tree`` is a full replacement (it
+            rebuilds every row, dropping expansion state, cell styles and
+            any open editor).  Because the model here is authoritative we
+            can diff against it instead and send just the deltas.  A diff
+            broader than a wholesale replacement falls back to
+            ``set_tree``.
+            """
+            args = _resolve_kwargs("update_tree", param_names, args, kwargs)
+            new_tree = args[0] if args else {}
+            old_tree = self._state.get("tree")
+
+            if not isinstance(old_tree, dict) or not isinstance(new_tree,
+                                                                dict):
+                self._state["tree"] = tree_model.copy_tree(new_tree)
+                _drop_row_styles(self)
+                return await self._call("set_tree", new_tree)
+
+            ops = tree_model.diff_tree(old_tree, new_tree)
+            self._state["tree"] = tree_model.copy_tree(new_tree)
+            if ops is None:
+                # wholesale replacement -- the browser clears, so the
+                # row-level style layers go with it
+                _drop_row_styles(self)
+                return await self._call("set_tree", new_tree)
+            result = None
+            for op in ops:
+                result = await self._call(op[0], *op[1:])
+            return result
+        update_tree_method.__name__ = "update_tree"
+        attrs["update_tree"] = update_tree_method
+
+    # --- incremental flat-data update ---
+    #
+    # The browser diffs these against what it is showing, so the whole
+    # array goes over the wire but only the rows that differ are
+    # touched (selection, colours and scroll position survive).  The
+    # model still has to record the new contents for reconnection.
+    for name, default_key in (("update_data", "data"),
+                              ("update_rows", "rows")):
+        if name not in all_methods:
+            continue
+
+        def make_update_rows(mn, dk, pn):
+            async def method(self, *args, **kwargs):
+                args = _resolve_kwargs(mn, pn, args, kwargs)
+                key = dk
+                for candidate in ("rows", "data"):
+                    if isinstance(self._state.get(candidate), list):
+                        key = candidate      # keep filling whichever
+                        break                # bulk setter was used
+                self._state[key] = tree_model.copy_tree(
+                    args[0] if args else None)
+                return await self._call(mn, *args)
+            method.__name__ = mn
+            return method
+        attrs[name] = make_update_rows(name, default_key, all_methods[name])
+
+    # --- flat row edits ---
+    for name, fn in (("insert_row", tree_model.insert_row),
+                     ("append_row", tree_model.append_row),
+                     ("delete_row", tree_model.delete_row)):
+        if name not in all_methods:
+            continue
+
+        def make_row_op(mn, func, pn):
+            async def method(self, *args, **kwargs):
+                args = _resolve_kwargs(mn, pn, args, kwargs)
+                rows = _model_rows(self)
+                if rows is not None:
+                    if mn == "append_row":
+                        func(rows, args[0] if args else None)
+                    elif mn == "delete_row":
+                        func(rows, args[0] if args else None)
+                    else:
+                        args2 = _pad(args, 2)
+                        func(rows, args2[0], args2[1])
+                return await self._call(mn, *args)
+            method.__name__ = mn
+            return method
+        attrs[name] = make_row_op(name, fn, all_methods[name])
+
+    # --- column edits ---
+    if "insert_column" in all_methods:
+        param_names = all_methods["insert_column"]
+        # TreeView is insert_column(column, before); TableView is
+        # insert_column(index, column) -- tell them apart by the defn
+        by_key = param_names and param_names[0] == "column"
+
+        async def insert_column_method(self, *args, **kwargs):
+            args = _resolve_kwargs("insert_column", param_names,
+                                   args, kwargs)
+            args = _pad(args, 2)
+            columns = self._state.get("columns")
+            if isinstance(columns, list):
+                if by_key:
+                    tree_model.insert_column(columns, args[0],
+                                             before=args[1])
+                else:
+                    tree_model.insert_column(columns, args[1],
+                                             index=args[0])
+            return await self._call("insert_column", *args)
+        insert_column_method.__name__ = "insert_column"
+        attrs["insert_column"] = insert_column_method
+
+    if "append_column" in all_methods:
+        param_names = all_methods["append_column"]
+
+        async def append_column_method(self, *args, **kwargs):
+            args = _resolve_kwargs("append_column", param_names,
+                                   args, kwargs)
+            columns = self._state.get("columns")
+            if isinstance(columns, list) and args:
+                tree_model.append_column(columns, args[0])
+            return await self._call("append_column", *args)
+        append_column_method.__name__ = "append_column"
+        attrs["append_column"] = append_column_method
+
+    if "delete_column" in all_methods:
+        param_names = all_methods["delete_column"]
+
+        async def delete_column_method(self, *args, **kwargs):
+            args = _resolve_kwargs("delete_column", param_names,
+                                   args, kwargs)
+            columns = self._state.get("columns")
+            if isinstance(columns, list) and args:
+                # TreeView deletes by column key, TableView by index;
+                # tree_model.delete_column accepts either
+                tree_model.delete_column(columns, args[0])
+            return await self._call("delete_column", *args)
+        delete_column_method.__name__ = "delete_column"
+        attrs["delete_column"] = delete_column_method
+
+    _add_colour_override_methods(attrs, all_methods)
+
+
+def _record_style(widget, state_key, map_key, call_args, nkeys):
+    """Record (or, when every colour channel is None, drop) one override.
+
+    ``call_args`` is the equivalent single-call argument tuple, so the
+    stored entry can be replayed by re-dispatch regardless of whether it
+    arrived singly or as part of a batch.
+    """
+    if all(v is None for v in call_args[nkeys:]):
+        widget._state.get(state_key, {}).pop(map_key, None)
+    else:
+        widget._state.setdefault(state_key, {})[map_key] = call_args
+
+
+def _add_colour_override_methods(attrs, all_methods):
+    """Accumulate the per-cell / row / column / table colour overrides.
+
+    These have no bulk setter to fold into, so they are kept as maps in
+    _state and replayed on top of the data during reconstruction.  An
+    all-null call clears that layer, matching the JS.
+    """
+    # method, total args, state key, number of leading key args
+    # (the remaining args are the fg / bg / bold channels)
+    specs = [
+        ("set_cell_color", 5, "_cell_styles", 2),
+        ("set_row_color", 4, "_row_styles", 1),
+        ("set_column_color", 4, "_column_styles", 1),
+        ("set_table_color", 3, "_table_style", 0),
+    ]
+    for name, nargs, state_key, nkeys in specs:
+        if name not in all_methods:
+            continue
+
+        def make_setter(mn, n, sk, nk, pn):
+            async def method(self, *args, **kwargs):
+                args = _resolve_kwargs(mn, pn, args, kwargs)
+                args = _pad(args, n)
+                cleared = all(v is None for v in args[nk:])
+                if nk == 0:                       # table-wide: one slot
+                    if cleared:
+                        self._state.pop(sk, None)
+                    else:
+                        self._state[sk] = tuple(args)
+                else:
+                    map_key = ((_style_path(args[0]), args[1]) if nk == 2
+                               else _style_path(args[0]))
+                    if cleared:
+                        self._state.get(sk, {}).pop(map_key, None)
+                    else:
+                        # keep the whole call, so replaying is a
+                        # straight re-dispatch
+                        self._state.setdefault(sk, {})[map_key] = tuple(args)
+                return await self._call(mn, *args)
+            method.__name__ = mn
+            return method
+        attrs[name] = make_setter(name, nargs, state_key, nkeys,
+                                  all_methods[name])
+
+    clears = [
+        ("clear_cell_color", "_cell_styles",
+         lambda a: (_style_path(a[0]), a[1])),
+        ("clear_row_color", "_row_styles", lambda a: _style_path(a[0])),
+        ("clear_column_color", "_column_styles", lambda a: a[0]),
+    ]
+    for name, state_key, keyfn in clears:
+        if name not in all_methods:
+            continue
+
+        def make_clear_one(mn, sk, kf, pn):
+            async def method(self, *args, **kwargs):
+                args = _resolve_kwargs(mn, pn, args, kwargs)
+                args = _pad(args, 2)
+                self._state.get(sk, {}).pop(kf(args), None)
+                return await self._call(mn, *args)
+            method.__name__ = mn
+            return method
+        attrs[name] = make_clear_one(name, state_key, keyfn,
+                                     all_methods[name])
+
+    if "set_colors" in all_methods:
+        param_names = all_methods["set_colors"]
+
+        async def set_colors_method(self, *args, **kwargs):
+            """Apply many colour overrides in one call.
+
+            Folds the batch into the same style maps the single-cell
+            setters use, so the model stays accurate for reconnection
+            while costing one round-trip and one browser re-render
+            instead of one of each per cell.
+            """
+            args = _resolve_kwargs("set_colors", param_names, args, kwargs)
+            spec = args[0] if args else None
+            if isinstance(spec, dict):
+                if spec.get("clear"):
+                    for key in ("_cell_styles", "_row_styles",
+                                "_column_styles", "_table_style"):
+                        self._state.pop(key, None)
+                for e in (spec.get("cells") or []):
+                    _record_style(
+                        self, "_cell_styles",
+                        (_style_path(e.get("path")), e.get("col_key")),
+                        (e.get("path"), e.get("col_key"), e.get("fg"),
+                         e.get("bg"), e.get("bold")), 2)
+                for e in (spec.get("rows") or []):
+                    _record_style(
+                        self, "_row_styles", _style_path(e.get("path")),
+                        (e.get("path"), e.get("fg"), e.get("bg"),
+                         e.get("bold")), 1)
+                for e in (spec.get("columns") or []):
+                    _record_style(
+                        self, "_column_styles", e.get("col_key"),
+                        (e.get("col_key"), e.get("fg"), e.get("bg"),
+                         e.get("bold")), 1)
+                if "table" in spec:
+                    t = spec.get("table") or {}
+                    channels = (t.get("fg"), t.get("bg"), t.get("bold"))
+                    if all(v is None for v in channels):
+                        self._state.pop("_table_style", None)
+                    else:
+                        self._state["_table_style"] = channels
+            return await self._call("set_colors", *args)
+        set_colors_method.__name__ = "set_colors"
+        attrs["set_colors"] = set_colors_method
+
+    if "clear_all_colors" in all_methods:
+        async def clear_all_colors_method(self):
+            for key in ("_cell_styles", "_row_styles", "_column_styles",
+                        "_table_style"):
+                self._state.pop(key, None)
+            return await self._call("clear_all_colors")
+        clear_all_colors_method.__name__ = "clear_all_colors"
+        attrs["clear_all_colors"] = clear_all_colors_method
+
 
 
 def _init_params(pos_names, opt_names):

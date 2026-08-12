@@ -11,6 +11,7 @@ the UI can be reconstructed when a browser reconnects.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import mimetypes
@@ -33,6 +34,8 @@ from pgwidgets.method_types import (
     STATE_SYNC_CALLBACKS, STATE_SYNC_REQUIRES_OPTION,
     WIDGET_CALLBACK_SYNC, POST_CHILDREN_STATE_KEYS, ITEM_LIST_CONFIG,
     CHILD_CLOSE_CALLBACKS, REPLAY_METHODS, TREE_VIEW_WIDGETS,
+    TREE_OVERRIDE_REPLAY, colour_batches, JS_ONLY_METHODS,
+    coalesce_colour_calls,
     BINARY_STATE_KEYS, _send_binary_auto,
 )
 
@@ -189,6 +192,14 @@ class Session:
 
         self._reconstructing = False  # suppress callbacks during reconstruction
 
+        # Batching (see batch()).  While _batch_depth is non-zero, calls
+        # are buffered here instead of being sent one at a time.
+        self._batch_depth = 0
+        self._batch_calls = []
+        # cleared if a browser rejects the 'batch' message; a new
+        # connection may be a newer client, so add_connection resets it
+        self._batch_supported = True
+
         # Browser viewport size (updated by 'viewport' messages from JS).
         self._screen_size = (0, 0)
 
@@ -247,6 +258,9 @@ class Session:
         """Add a browser connection to this session."""
         if ws not in self._connections:
             self._connections.append(ws)
+        # a reconnecting browser may be a newer client than the one
+        # that made us give up on batching
+        self._batch_supported = True
 
     def remove_connection(self, ws):
         """Remove a browser connection from this session."""
@@ -548,7 +562,8 @@ class Session:
                 key_path = tuple(path) if isinstance(path, list) else path
                 expanded = widget._state.setdefault(
                     "_expanded_paths", set())
-                expanded.add(key_path)
+                if expanded != "_all":
+                    expanded.add(key_path)
                 collapsed = widget._state.get("_collapsed_paths")
                 if collapsed is not None and collapsed != "_all":
                     collapsed.discard(key_path)
@@ -557,7 +572,7 @@ class Session:
                 path = args[1]
                 key_path = tuple(path) if isinstance(path, list) else path
                 expanded = widget._state.get("_expanded_paths")
-                if expanded is not None:
+                if expanded is not None and expanded != "_all":
                     expanded.discard(key_path)
                 collapsed = widget._state.setdefault(
                     "_collapsed_paths", set())
@@ -733,11 +748,101 @@ class Session:
         })
         return wid
 
+    @contextlib.contextmanager
+    def batch(self):
+        """Apply many updates as one message.
+
+        Every call normally goes to the browser on its own and blocks
+        for the reply, and widgets like TreeView re-render on each one.
+        For a burst of updates -- a refresh rewriting a few hundred
+        cells, say -- that is slow and paints in visible stages.  Inside
+        this context the calls are buffered and sent as a single batch
+        on exit, which the browser applies with rendering suspended, so
+        each widget draws once::
+
+            with tree.get_session().batch():
+                for path, col, value in changes:
+                    tree.set_cell(path, col, value)
+
+        Widget state is still updated as each call is made -- only the
+        traffic is deferred -- so the Python-side model stays correct
+        throughout, and a reconnect landing mid-batch reconstructs from
+        it correctly.
+
+        Calls made inside a batch return None.  Methods that genuinely
+        need an answer from the browser (getters, and the browser-only
+        queries) flush the batch first and execute immediately, so
+        ordering is preserved.
+
+        Nests: only the outermost block flushes.  The buffer is flushed
+        on the way out even if the body raises, because those calls have
+        already been applied to the model and dropping them would leave
+        the browser diverged from it.
+        """
+        self._batch_depth += 1
+        try:
+            yield self
+        finally:
+            self._batch_depth -= 1
+            if self._batch_depth == 0:
+                self._flush_batch()
+
+    def _flush_batch(self):
+        """Send everything buffered by batch() as one message.
+
+        A browser older than this server won't know the ``batch``
+        message -- a page that was loaded before the server was
+        upgraded, most commonly.  Rather than failing the caller's
+        update, fall back to sending the calls individually and stop
+        trying to batch for this connection.  Reloading the page picks
+        up the current client and re-enables it.
+        """
+        calls, self._batch_calls = self._batch_calls, []
+        if not calls:
+            return None
+        # _send handles the no-browser case (and is the single place
+        # that policy lives)
+        # Fold runs of colour calls into set_colors: one re-render in
+        # the browser instead of one per cell.
+        calls = coalesce_colour_calls(calls)
+        if self._batch_supported:
+            self._logger.debug("flushing a batch of %d call(s)", len(calls))
+            try:
+                return self._send({"type": "batch", "calls": calls})
+            except RuntimeError as e:
+                if "Unknown message type" not in str(e):
+                    raise
+                self._batch_supported = False
+                self._logger.warning(
+                    "browser does not understand batched updates (it is "
+                    "running an older pgwidgets-js); sending calls "
+                    "individually. Reload the page to re-enable batching.")
+        for call in calls:
+            self._send({"type": "call", **call})
+        return None
+
+    def _needs_result(self, method):
+        """True if `method` has to reach the browser now to be useful.
+
+        Getters answer from local state where they can; the ones that
+        can't (and the browser-only queries) must not be deferred, or
+        the caller gets None where it expected a value.
+        """
+        return method.startswith("get_") or method in JS_ONLY_METHODS
+
     def _call(self, wid, method, *args):
         """Call a method on a JS widget.
 
         Returns None if no browser is connected.
         """
+        if self._batch_depth > 0:
+            if not self._needs_result(method):
+                self._batch_calls.append({"wid": wid, "method": method,
+                                          "args": list(args)})
+                return None
+            # has to go now -- flush what's queued so it stays ordered
+            self._flush_batch()
+
         result = self._send({
             "type": "call",
             "wid": wid,
@@ -1532,6 +1637,13 @@ class Session:
                                        list(path))
                     continue
 
+                # Tree/table colour overrides are replayed together as
+                # batches once the whole state has been walked (see
+                # below) -- one round-trip and one browser re-render per
+                # batch, rather than per coloured cell.
+                if key in TREE_OVERRIDE_REPLAY or key == "_table_style":
+                    continue
+
                 # Tree/table sort
                 if key == "_sort":
                     col, asc = value
@@ -1546,6 +1658,10 @@ class Session:
                     self._call(widget._wid, method_name, *value)
                 else:
                     self._call(widget._wid, method_name, value)
+
+            # Colour overrides, batched
+            for spec in colour_batches(widget):
+                self._call(widget._wid, "set_colors", spec)
 
             # Show/hide
             for key, value in widget._state.items():

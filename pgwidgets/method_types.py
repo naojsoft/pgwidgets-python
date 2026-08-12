@@ -87,9 +87,13 @@ ACTION_METHODS = {
     # Per-cell / row / column / table colour overrides — the
     # ``set_*`` naming would otherwise classify them as SETTERs,
     # whose single-state-slot semantics can't represent the
-    # accumulated dict of overrides we actually keep.  ACTION
-    # dispatch sends each call straight through to the JS side,
-    # which holds the canonical state in its own maps.
+    # accumulated dict of overrides we actually keep.  Listed here
+    # so no SETTER is generated; _add_tree_view_methods() then
+    # supplies generators that accumulate them into the _cell_styles
+    # / _row_styles / _column_styles / _table_style dicts, which
+    # reconstruct() replays (see TREE_OVERRIDE_REPLAY).  Same
+    # arrangement as expand_item / sort_by_column above.
+    "set_colors",
     "set_cell_color", "set_row_color", "set_column_color",
     "set_table_color",
     "clear_cell_color", "clear_row_color", "clear_column_color",
@@ -107,8 +111,14 @@ ACTION_METHODS = {
     "raise_", "lower",
     # Timer
     "start", "cancel", "set", "cond_set",
-    # Table/Tree row-level modifications (tracked via bulk set_data)
+    # Tree / table / column mutations.  Listed here so no SETTER is
+    # generated (none of them sets a single state slot);
+    # _add_tree_view_methods() then supplies generators that apply each
+    # mutation to the tree / rows / columns model in _state, so the bulk
+    # state replayed on reconnect reflects every change since, not just
+    # the last wholesale set.  See pgwidgets.tree_model.
     "add_item", "remove_item", "update_tree", "remove_items", "delete_tree",
+    "update_data", "update_rows",
     "insert_row", "append_row", "delete_row",
     "insert_column", "append_column", "delete_column",
     "set_cell",
@@ -232,7 +242,123 @@ CHILD_SELECT_METHODS = {
 # (e.g. Splitter.set_sizes needs panes to already exist).
 POST_CHILDREN_STATE_KEYS = {"sizes", "index", "_collapsed_paths",
                             "_expanded_paths", "_sort", "scroll_position",
-                            "scroll_percent"}
+                            "scroll_percent",
+                            # Tree/table colour overrides.  Unlike the row
+                            # data -- which folds into the tree/rows model
+                            # and is replayed by the bulk setter -- these
+                            # have no bulk setter, so they are accumulated
+                            # and replayed on top of the data.
+                            "_cell_styles", "_row_styles",
+                            "_column_styles", "_table_style"}
+
+# Maps a colour-override state key to the method that replays one stored
+# entry during reconstruction.  Each entry holds the original call's
+# argument tuple, so replaying is a straight re-dispatch.  _table_style
+# holds a single tuple rather than a dict of them.
+TREE_OVERRIDE_REPLAY = {
+    "_cell_styles": "set_cell_color",
+    "_row_styles": "set_row_color",
+    "_column_styles": "set_column_color",
+}
+
+# Colour overrides are replayed in batches rather than one call per
+# cell: each single call is a blocking websocket round-trip *and* a full
+# re-render in the browser, so restoring a few hundred coloured cells
+# one at a time is slow and visibly iterative.  Cells are chunked so no
+# single message grows unreasonably large.
+COLOUR_BATCH_SIZE = 500
+
+
+# Colour calls that can be folded into a single ``set_colors``, mapped
+# to the spec key they contribute to and the names of their arguments.
+_COLOUR_CALL_SPEC = {
+    "set_cell_color": ("cells", ("path", "col_key", "fg", "bg", "bold")),
+    "set_row_color": ("rows", ("path", "fg", "bg", "bold")),
+    "set_column_color": ("columns", ("col_key", "fg", "bg", "bold")),
+    "set_table_color": ("table", ("fg", "bg", "bold")),
+}
+
+
+def coalesce_colour_calls(calls):
+    """Fold runs of colour calls in a batch into single ``set_colors``.
+
+    Each ``set_*_color`` re-renders the widget, so a few hundred of them
+    are slow in the browser even when they arrive in one message -- the
+    reason the reconnect path uses ``set_colors`` instead.  Doing the
+    same for batched calls means an app can keep writing the simple
+    per-cell loop and still get one render.
+
+    Only *consecutive* calls on the same widget are merged, so ordering
+    against any interleaved non-colour call is preserved.  Runs of one
+    are left alone.  ``set_colors`` and the batch message arrived
+    together, so a browser that understands the batch understands the
+    merged call.
+    """
+    out = []
+    i = 0
+    n = len(calls)
+    while i < n:
+        call = calls[i]
+        if call.get("method") not in _COLOUR_CALL_SPEC:
+            out.append(call)
+            i += 1
+            continue
+
+        wid = call.get("wid")
+        run = []
+        while (i < n and calls[i].get("method") in _COLOUR_CALL_SPEC
+               and calls[i].get("wid") == wid):
+            run.append(calls[i])
+            i += 1
+
+        if len(run) == 1:
+            out.append(run[0])
+            continue
+
+        spec = {}
+        for entry in run:
+            key, names = _COLOUR_CALL_SPEC[entry["method"]]
+            values = dict(zip(names, entry.get("args", [])))
+            if key == "table":
+                spec["table"] = values
+            else:
+                spec.setdefault(key, []).append(values)
+        out.append({"wid": wid, "method": "set_colors", "args": [spec]})
+    return out
+
+
+def colour_batches(widget, chunk=COLOUR_BATCH_SIZE):
+    """Return the ``set_colors`` specs that restore a widget's colours.
+
+    The row, column and table layers ride along in the first batch; the
+    per-cell overrides are split across as many batches as needed.
+    """
+    state = getattr(widget, "_state", None) or {}
+    cells = [dict(zip(("path", "col_key", "fg", "bg", "bold"), args))
+             for args in state.get("_cell_styles", {}).values()]
+    rows = [dict(zip(("path", "fg", "bg", "bold"), args))
+            for args in state.get("_row_styles", {}).values()]
+    columns = [dict(zip(("col_key", "fg", "bg", "bold"), args))
+               for args in state.get("_column_styles", {}).values()]
+    table = state.get("_table_style")
+
+    if not (cells or rows or columns or table):
+        return []
+
+    first = {}
+    if rows:
+        first["rows"] = rows
+    if columns:
+        first["columns"] = columns
+    if table is not None:
+        first["table"] = dict(zip(("fg", "bg", "bold"), table))
+    if cells[:chunk]:
+        first["cells"] = cells[:chunk]
+
+    batches = [first]
+    for i in range(chunk, len(cells), chunk):
+        batches.append({"cells": cells[i:i + chunk]})
+    return batches
 
 # Default state values applied when a widget is created without
 # explicitly setting the key (e.g. TextEntry() with no text arg).
@@ -297,8 +423,12 @@ CLEAR_RESETS = {
     "TextArea": ["text"],
     "TextSource": ["text"],
     "ComboBox": ["text", "index", "_items"],
-    "TreeView": ["tree", "data", "_collapsed_paths", "_sort"],
-    "TableView": ["rows", "data", "_collapsed_paths", "_sort"],
+    # The JS clear() empties its per-cell and per-row style maps but
+    # keeps the column / table layers, so mirror exactly that.
+    "TreeView": ["tree", "data", "_collapsed_paths", "_sort",
+                 "_cell_styles", "_row_styles"],
+    "TableView": ["rows", "data", "_collapsed_paths", "_sort",
+                  "_cell_styles", "_row_styles"],
     "HtmlView": ["html"],
     "ExternalWidget": ["content"],
 }

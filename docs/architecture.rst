@@ -54,6 +54,9 @@ All messages are JSON objects with a ``type`` field.
   call a method on a widget.
 - ``{"type": "call", ..., "silent": true}`` -- call a method without
   triggering callbacks (used for cross-browser sync).
+- ``{"type": "batch", "calls": [{"wid": 1, "method": "set_cell",
+  "args": [...]}, ...]}`` -- apply many calls as one message (see
+  `Batching Updates`_).
 - ``{"type": "listen", "wid": 1, "action": "activated"}`` -- subscribe to a
   callback.
 - ``{"type": "unlisten", "wid": 1, "action": "activated"}`` -- unsubscribe.
@@ -180,3 +183,45 @@ passed as an argument to another widget's method (e.g., ``vbox.add_widget(btn,
 0)``), the framework automatically converts the Python ``Widget`` object to a
 ``{"__wid__": N}`` reference on the wire, and converts it back on return
 values.
+
+
+Batching Updates
+----------------
+
+Every widget call is normally its own message, and blocks until the
+browser replies.  While the UI is being built that costs nothing --
+with no browser attached the calls return immediately -- so the cost
+only shows up when a connected browser is being updated in bulk: a
+refresh rewriting a few hundred cells, say.  Two things make that slow:
+one round-trip per call, and widgets such as ``TreeView`` re-rendering
+on each one, which also makes the update paint in visible stages.
+
+``Session.batch()`` (also reachable as ``widget.batch()``, since
+batching is per session) buffers the calls and sends them as a single
+``batch`` message.  The browser applies them with rendering suspended
+on each widget it touches, so every widget draws once:
+
+.. code-block:: python
+
+   with tree.batch():
+       for path, col_key, value in changes:
+           tree.set_cell(path, col_key, value)
+       status.set_text("updated")
+
+Semantics worth knowing:
+
+- **State is still updated immediately.**  Only the traffic is
+  deferred, so the Python-side model stays correct throughout and a
+  reconnect landing mid-batch reconstructs from it correctly.
+- **Batched calls return None.**  Methods that genuinely need an answer
+  from the browser -- getters, and the browser-only queries -- flush the
+  pending batch and execute immediately, so ordering is preserved.
+- **Nesting is allowed;** only the outermost block flushes.
+- **The buffer is flushed even if the body raises.**  Those calls have
+  already been applied to the model, so dropping them would leave the
+  browser diverged from it.
+
+Reconnection does its own batching: the colour overrides a tree or
+table carries are replayed as a few large ``set_colors`` calls rather
+than one per cell, so restoring a heavily coloured table is not
+proportional to the number of round-trips.

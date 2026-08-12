@@ -11,6 +11,7 @@ the UI can be reconstructed when a browser reconnects.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import mimetypes
@@ -31,6 +32,8 @@ from pgwidgets.method_types import (
     STATE_SYNC_CALLBACKS, STATE_SYNC_REQUIRES_OPTION,
     WIDGET_CALLBACK_SYNC, POST_CHILDREN_STATE_KEYS, ITEM_LIST_CONFIG,
     CHILD_CLOSE_CALLBACKS, REPLAY_METHODS, TREE_VIEW_WIDGETS,
+    TREE_OVERRIDE_REPLAY, colour_batches, JS_ONLY_METHODS,
+    coalesce_colour_calls,
     BINARY_STATE_KEYS, _send_binary_auto,
 )
 from pgwidgets.async_.widget import Widget, build_all_widget_classes
@@ -142,6 +145,14 @@ class Session:
 
         self._reconstructing = False  # suppress callbacks during reconstruction
 
+        # Batching (see batch()).  While _batch_depth is non-zero, calls
+        # are buffered here instead of being sent one at a time.
+        self._batch_depth = 0
+        self._batch_calls = []
+        # cleared if a browser rejects the 'batch' message; a new
+        # connection may be a newer client, so add_connection resets it
+        self._batch_supported = True
+
         # Browser viewport size (updated by 'viewport' messages from JS).
         self._screen_size = (0, 0)
 
@@ -198,6 +209,9 @@ class Session:
         """Add a browser connection to this session."""
         if ws not in self._connections:
             self._connections.append(ws)
+        # a reconnecting browser may be a newer client than the one
+        # that made us give up on batching
+        self._batch_supported = True
 
     def remove_connection(self, ws):
         """Remove a browser connection from this session."""
@@ -459,7 +473,8 @@ class Session:
                 key_path = tuple(path) if isinstance(path, list) else path
                 expanded = widget._state.setdefault(
                     "_expanded_paths", set())
-                expanded.add(key_path)
+                if expanded != "_all":
+                    expanded.add(key_path)
                 collapsed = widget._state.get("_collapsed_paths")
                 if collapsed is not None and collapsed != "_all":
                     collapsed.discard(key_path)
@@ -468,7 +483,7 @@ class Session:
                 path = args[1]
                 key_path = tuple(path) if isinstance(path, list) else path
                 expanded = widget._state.get("_expanded_paths")
-                if expanded is not None:
+                if expanded is not None and expanded != "_all":
                     expanded.discard(key_path)
                 collapsed = widget._state.setdefault(
                     "_collapsed_paths", set())
@@ -678,11 +693,76 @@ class Session:
         })
         return wid
 
+    @contextlib.asynccontextmanager
+    async def batch(self):
+        """Apply many updates as one message.
+
+        The async counterpart of the sync ``Session.batch``; see that
+        docstring for the semantics.  Used as::
+
+            async with tree.batch():
+                for path, col, value in changes:
+                    await tree.set_cell(path, col, value)
+        """
+        self._batch_depth += 1
+        try:
+            yield self
+        finally:
+            self._batch_depth -= 1
+            if self._batch_depth == 0:
+                await self._flush_batch()
+
+    async def _flush_batch(self):
+        """Send everything buffered by batch() as one message.
+
+        A browser older than this server won't know the ``batch``
+        message -- a page that was loaded before the server was
+        upgraded, most commonly.  Rather than failing the caller's
+        update, fall back to sending the calls individually and stop
+        trying to batch for this connection.  Reloading the page picks
+        up the current client and re-enables it.
+        """
+        calls, self._batch_calls = self._batch_calls, []
+        if not calls:
+            return None
+        # _send handles the no-browser case (and is the single place
+        # that policy lives)
+        # Fold runs of colour calls into set_colors: one re-render in
+        # the browser instead of one per cell.
+        calls = coalesce_colour_calls(calls)
+        if self._batch_supported:
+            self._logger.debug("flushing a batch of %d call(s)", len(calls))
+            try:
+                return await self._send({"type": "batch", "calls": calls})
+            except RuntimeError as e:
+                if "Unknown message type" not in str(e):
+                    raise
+                self._batch_supported = False
+                self._logger.warning(
+                    "browser does not understand batched updates (it is "
+                    "running an older pgwidgets-js); sending calls "
+                    "individually. Reload the page to re-enable batching.")
+        for call in calls:
+            await self._send({"type": "call", **call})
+        return None
+
+    def _needs_result(self, method):
+        """True if `method` has to reach the browser now to be useful."""
+        return method.startswith("get_") or method in JS_ONLY_METHODS
+
     async def _call(self, wid, method, *args):
         """Call a method on a JS widget.
 
         Returns None if no browser is connected.
         """
+        if self._batch_depth > 0:
+            if not self._needs_result(method):
+                self._batch_calls.append({"wid": wid, "method": method,
+                                          "args": list(args)})
+                return None
+            # has to go now -- flush what's queued so it stays ordered
+            await self._flush_batch()
+
         result = await self._send({
             "type": "call",
             "wid": wid,
@@ -1335,6 +1415,13 @@ class Session:
                                              list(path))
                     continue
 
+                # Tree/table colour overrides are replayed together as
+                # batches once the whole state has been walked (see
+                # below) -- one round-trip and one browser re-render per
+                # batch, rather than per coloured cell.
+                if key in TREE_OVERRIDE_REPLAY or key == "_table_style":
+                    continue
+
                 # Tree/table sort
                 if key == "_sort":
                     col, asc = value
@@ -1349,6 +1436,10 @@ class Session:
                     await self._call(widget._wid, method_name, *value)
                 else:
                     await self._call(widget._wid, method_name, value)
+
+            # Colour overrides, batched
+            for spec in colour_batches(widget):
+                await self._call(widget._wid, "set_colors", spec)
 
             # Show/hide
             for key, value in widget._state.items():

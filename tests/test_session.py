@@ -425,3 +425,62 @@ class TestProcessEventsDrain:
         app.process_events(0)
         assert slot["value"] == 42
         assert slot["event"].is_set()
+
+
+class TestExpandCollapseStateSync:
+    """Browser-driven expand/collapse must survive the "_all" sentinel.
+
+    ``expand_all()`` / ``collapse_all()`` store the string ``"_all"`` in
+    ``_expanded_paths`` / ``_collapsed_paths`` instead of a set of paths.
+    A subsequent expand or collapse of a single node in the browser used
+    to call ``.add()`` / ``.discard()`` on that string and blow up in the
+    websocket connection handler.
+    """
+
+    def _make_tree(self):
+        app = _make_app()
+        app._widget_classes = {
+            "TreeView": build_widget_class("TreeView", WIDGETS["TreeView"]),
+        }
+        s = app.create_session()
+        tree = app._widget_classes["TreeView"]._from_existing(s, 1, "TreeView")
+        s._widget_map[1] = tree
+        return s, tree
+
+    def test_collapse_event_after_expand_all(self):
+        s, tree = self._make_tree()
+        tree.expand_all()
+        assert tree._state["_expanded_paths"] == "_all"
+        # browser reports the user collapsing one node
+        s._dispatch_callback(1, "collapsed", {}, ["ob1"])
+        assert tree._state["_expanded_paths"] == "_all"
+        assert tree._state["_collapsed_paths"] == {("ob1",)}
+
+    def test_expand_event_after_collapse_all(self):
+        s, tree = self._make_tree()
+        tree.collapse_all()
+        assert tree._state["_collapsed_paths"] == "_all"
+        s._dispatch_callback(1, "expanded", {}, ["ob1"])
+        assert tree._state["_collapsed_paths"] == "_all"
+        assert tree._state["_expanded_paths"] == {("ob1",)}
+
+    def test_expand_event_after_expand_all(self):
+        s, tree = self._make_tree()
+        tree.expand_all()
+        s._dispatch_callback(1, "expanded", {}, ["ob1"])
+        assert tree._state["_expanded_paths"] == "_all"
+
+    def test_collapse_item_after_expand_all(self):
+        """The same guard is needed on the Python-side method."""
+        s, tree = self._make_tree()
+        tree.expand_all()
+        tree.collapse_item(["ob1"])
+        assert tree._state["_expanded_paths"] == "_all"
+        assert tree._state["_collapsed_paths"] == {("ob1",)}
+
+    def test_expand_item_after_collapse_all(self):
+        s, tree = self._make_tree()
+        tree.collapse_all()
+        tree.expand_item(["ob1"])
+        assert tree._state["_collapsed_paths"] == "_all"
+        assert tree._state["_expanded_paths"] == {("ob1",)}
