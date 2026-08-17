@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64", "setuptools-scm>=8"]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,26 +7,27 @@ name = "pgwidgets-python"
 dynamic = ["version"]
 description = "Python bindings for the pgwidgets JavaScript widget library"
 readme = "README.md"
-license = {text = "BSD-3-Clause"}
+license = "BSD-3-Clause"
+license-files = ["LICENSE.md"]
 requires-python = ">=3.12"
 authors = [
     {name = "PGWidgets Developers"},
 ]
 dependencies = [
-    # Tests and runtime expect the TextSource selection/tag-region and
-    # tooltip/scroll APIs, the Separator widget, Button.set_hover,
-    # ButtonBox.min_button_width, and Dialog.set_title — introduced in
-    # pgwidgets-js 0.3.4.  (Earlier requirements — set_min_size/
-    # set_max_size, the dict-tree TreeView, the binary Image protocol,
-    # TopLevel window-control options — date back to 0.2.0.)
-    "pgwidgets-js>=0.3.4",
+    # Tests and runtime expect the incremental TreeView/TableView updates
+    # and the "batch" / set_colors protocol messages — introduced in
+    # pgwidgets-js 0.4.0.  (Earlier requirements — the TextSource
+    # selection/tag-region and tooltip/scroll APIs, Separator,
+    # Button.set_hover, ButtonBox.min_button_width, Dialog.set_title
+    # date to 0.3.4; set_min_size/set_max_size, the dict-tree TreeView,
+    # the binary Image protocol, TopLevel window-control options to 0.2.0.)
+    "pgwidgets-js>=0.4.0",
     "websockets>=12",
 ]
 keywords = ["widgets", "ui", "gui", "websocket", "browser"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: BSD License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",

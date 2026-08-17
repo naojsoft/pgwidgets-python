@@ -1,6 +1,41 @@
 What's New
 ==========
 
+Recent changes — since ``v0.3.5``
+---------------------------------
+
+TreeView / TableView: Python-authoritative model, batched updates
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Python is now the source of truth for the tree/table model, so a
+browser reconnect rebuilds the *current* state instead of replaying
+the original snapshot.  Previously only the bulk setters were tracked,
+so later mutations were fire-and-forget: a reconnect silently reverted
+every change made since the last full load and dropped the colour
+overrides entirely.
+
+* All the incremental edits -- ``set_cell``, ``add_item`` /
+  ``remove_item`` / ``remove_items``, ``add_tree`` / ``delete_tree``,
+  and the row / column edits -- now apply to the stored model, so they
+  survive reconnect.  Bulk setters deep-copy their input, so a caller
+  that keeps editing the structure it passed in can't corrupt the model.
+* Colour overrides accumulate per cell / row / column / table and are
+  replayed after the data on reconnect, in chunked ``set_colors``
+  batches rather than one call per cell.
+* ``update_tree`` diffs against the model and sends only the deltas, so
+  the browser keeps its expansion state, cell styles, and any open
+  editor.
+* ``Session.batch()`` (and ``widget.batch()``) buffers a burst of calls
+  into a single ``batch`` message; runs of colour calls fold into
+  ``set_colors``, so a plain per-cell loop still redraws once.  State
+  updates as each call is made, so a reconnect mid-batch still
+  reconstructs correctly, and a browser predating the batch message
+  falls back to individual calls.
+* Fixed expand/collapse tracking after ``expand_all()`` /
+  ``collapse_all()`` (the ``"_all"`` sentinel raised ``AttributeError``
+  in the websocket handler when a node was later expanded or
+  collapsed).
+
 Recent changes — since ``v0.3.0``
 ---------------------------------
 
