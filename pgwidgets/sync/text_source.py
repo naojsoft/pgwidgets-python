@@ -29,6 +29,13 @@ from pgwidgets.text_model import TextModel
 _GeneratedTextSource = build_widget_class("TextSource", WIDGETS["TextSource"])
 
 
+def _check_align(align):
+    if align not in ('nearest', 'center', 'top'):
+        raise ValueError("align should be one of 'nearest', 'center' "
+                         "or 'top'")
+    return align
+
+
 class _BrowserTextModel(TextModel):
     """A TextModel whose render hooks push offset-based operations to the
     browser via the owning widget.  When no browser is connected the calls
@@ -118,6 +125,8 @@ class TextSource(_GeneratedTextSource):
         text = self._state.get("text")
         self._model._text = "" if text is None else str(text)
         self._state.pop("text", None)
+        # caret appearance (see set_cursor_style); replayed on reconnect
+        self._cursor_style = ('line', None)
 
     def create_tag(self, name, attrs=None, **kwdargs):
         """Define a display tag locally and push its styling to the browser."""
@@ -126,18 +135,46 @@ class TextSource(_GeneratedTextSource):
         self._model.create_tag(name, merged)
         self._call("create_tag", name, merged)
 
-    def scroll_to_ref(self, ref):
-        """Scroll the view to a ref, addressed by its current offset."""
-        self._call("_scrollToOffset", self._model._offset_of(ref))
+    def scroll_to_ref(self, ref, align='nearest'):
+        """Scroll the view to a ref, addressed by its current offset.
 
-    def scroll_to_lineno(self, lineno):
-        """Scroll so that line ``lineno`` is visible."""
+        ``align`` says where the line should end up: 'nearest' scrolls the
+        least amount that brings it into view (the default), 'center' puts
+        it in the middle of the view and 'top' at the top.
+        """
+        self._call("_scrollToOffset", self._model._offset_of(ref),
+                   _check_align(align))
+
+    def scroll_to_lineno(self, lineno, align='nearest'):
+        """Scroll so that line ``lineno`` is visible; see
+        ``scroll_to_ref`` for ``align``."""
         self._call("_scrollToOffset",
-                   self._model._offset_of_line_start(lineno))
+                   self._model._offset_of_line_start(lineno),
+                   _check_align(align))
 
     def scroll_to_end(self):
         """Scroll to the end of the buffer."""
-        self._call("_scrollToOffset", self._model.get_length())
+        self._call("_scrollToOffset", self._model.get_length(), 'nearest')
+
+    def set_cursor_style(self, style='line', color=None):
+        """Set the appearance of the text caret.
+
+        ``style`` is 'line' (a thin vertical bar, the default) or 'block';
+        ``color`` is any CSS color, or None for the browser default.
+
+        NOTE: this styles the browser's own caret, so it is only drawn
+        while the editor has the keyboard focus, and the block shape needs
+        a browser that supports the CSS 'caret-shape' property (elsewhere
+        the caret keeps its color but stays a thin bar).
+        """
+        if style not in ('line', 'block'):
+            raise ValueError("style should be one of 'line' or 'block'")
+        self._cursor_style = (style, color)
+        self._call("set_cursor_style", style, color)
+
+    def get_cursor_style(self):
+        """Return the caret appearance as a ``(style, color)`` pair."""
+        return self._cursor_style
 
     def show_tooltip(self, text, x, y):
         """Show a hover tooltip (``text``) near viewport point (x, y), or
@@ -182,6 +219,8 @@ class TextSource(_GeneratedTextSource):
             self._call("_setSelectionOffsets", m._sel_start, m._sel_end)
         else:
             self._call("_setCursorOffset", m._cursor)
+        if self._cursor_style != ('line', None):
+            self._call("set_cursor_style", *self._cursor_style)
 
 
 def _install_delegators():

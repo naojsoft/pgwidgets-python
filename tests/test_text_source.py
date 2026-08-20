@@ -5,6 +5,8 @@ replayed on connect), which is exactly the case that used to crash callers
 that queried refs during construction.
 """
 
+import pytest
+
 from pgwidgets.sync.Widgets import TextSource
 from pgwidgets.text_model import TextBufferRef
 
@@ -159,3 +161,56 @@ def test_reconstruct_pushes_full_state():
     assert sess.sent[0][1][0] == "abcdef"
     assert "create_tag" in methods
     assert "_restoreTagIntervals" in methods
+
+
+def test_scroll_alignment_rides_along_with_the_offset():
+    """A caller can ask for the target line to be centered rather than
+    merely brought into view."""
+    tw = _ts()
+    tw.insert_text(tw.get_ref_end(), "l0\nl1\nl2")
+    sess = tw._session
+    sess.sent.clear()
+
+    tw.scroll_to_lineno(2, align='center')
+    tw.scroll_to_ref(tw.get_ref_line_start(1), align='top')
+    tw.scroll_to_lineno(0)
+
+    calls = [m[1] for m in sess.sent if m[0] == "_scrollToOffset"]
+    assert calls == [[6, 'center'], [3, 'top'], [0, 'nearest']]
+
+
+def test_an_unknown_alignment_is_rejected():
+    tw = _ts()
+    with pytest.raises(ValueError):
+        tw.scroll_to_lineno(0, align='middle')
+
+
+def test_cursor_style_is_pushed_and_remembered():
+    tw = _ts()
+    sess = tw._session
+    assert tw.get_cursor_style() == ('line', None)
+    sess.sent.clear()
+
+    tw.set_cursor_style('block', color='indianred')
+
+    assert ("set_cursor_style", ['block', 'indianred']) in [
+        (m[0], m[1]) for m in sess.sent]
+    assert tw.get_cursor_style() == ('block', 'indianred')
+
+
+def test_cursor_style_is_replayed_to_a_reconnecting_browser():
+    tw = _ts()
+    tw.set_cursor_style('block', color='indianred')
+    sess = tw._session
+    sess.sent.clear()
+
+    tw._reconstruct_model()
+
+    assert ("set_cursor_style", ['block', 'indianred']) in [
+        (m[0], m[1]) for m in sess.sent]
+
+
+def test_an_unknown_cursor_style_is_rejected():
+    tw = _ts()
+    with pytest.raises(ValueError):
+        tw.set_cursor_style('underline')
