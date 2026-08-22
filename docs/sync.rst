@@ -114,8 +114,8 @@ Bytes are served from ``/_pgwidgets/font/<id>`` by the built-in
 HTTP server with ``Cache-Control: immutable``; behind Flask /
 nginx the same route is served from the Python process.
 
-See also the JS-side write-up at :ref:`custom-fonts` in the
-pgwidgets-js documentation.
+See also the "Custom fonts" section of the pgwidgets-js
+documentation for the browser side of this.
 
 Opening a URL in the browser
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

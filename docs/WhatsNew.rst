@@ -1,6 +1,29 @@
 What's New
 ==========
 
+Recent changes — since ``v0.4.0``
+---------------------------------
+
+TextSource: scroll alignment and caret styling
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``scroll_to_ref(ref, align)`` and ``scroll_to_lineno(lineno, align)``
+take an alignment -- ``'nearest'`` (the default, as before),
+``'center'`` or ``'top'`` -- and pass it to the browser alongside the
+offset.  A search that scrolls to its match can now put the match in
+the middle of the view rather than merely bringing it into sight.
+
+``set_cursor_style(style, color)`` picks a ``'line'`` or ``'block'``
+caret in any colour, and ``get_cursor_style()`` reads the pair back.
+The choice is part of the model, replayed from
+``_reconstruct_model()``, so a browser that (re)connects gets the caret
+along with everything else.  It is styled through the browser's own
+``caret-color`` / ``caret-shape``, so it shows only while the editor
+has the focus.
+
+These need the matching methods in pgwidgets-js 0.4.1, which the
+dependency floor now requires.
+
 Recent changes — since ``v0.3.5``
 ---------------------------------
 
@@ -156,7 +179,7 @@ the 4th argument, so handlers that double-click a file can see
 which column they hit.  Existing handlers (3-arg) keep working.
 
 ``_resolve_kwargs``: skipped-positional kwargs
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The kwarg resolver used by every generated widget method now
 allows a caller to skip a positional argument and supply the

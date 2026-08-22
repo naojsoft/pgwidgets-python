@@ -14,14 +14,15 @@ authors = [
     {name = "PGWidgets Developers"},
 ]
 dependencies = [
-    # Tests and runtime expect the incremental TreeView/TableView updates
-    # and the "batch" / set_colors protocol messages — introduced in
-    # pgwidgets-js 0.4.0.  (Earlier requirements — the TextSource
-    # selection/tag-region and tooltip/scroll APIs, Separator,
-    # Button.set_hover, ButtonBox.min_button_width, Dialog.set_title
-    # date to 0.3.4; set_min_size/set_max_size, the dict-tree TreeView,
-    # the binary Image protocol, TopLevel window-control options to 0.2.0.)
-    "pgwidgets-js>=0.4.0",
+    # TextSource's scroll alignment and set_cursor_style() need the
+    # matching browser-side methods, introduced in pgwidgets-js 0.4.1.
+    # (Earlier requirements — the incremental TreeView/TableView updates
+    # and the "batch" / set_colors protocol messages date to 0.4.0; the
+    # TextSource selection/tag-region and tooltip/scroll APIs, Separator,
+    # Button.set_hover, ButtonBox.min_button_width, Dialog.set_title to
+    # 0.3.4; set_min_size/set_max_size, the dict-tree TreeView, the
+    # binary Image protocol, TopLevel window-control options to 0.2.0.)
+    "pgwidgets-js>=0.4.1",
     "websockets>=12",
 ]
 keywords = ["widgets", "ui", "gui", "websocket", "browser"]
