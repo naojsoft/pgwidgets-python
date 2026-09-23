@@ -4,6 +4,22 @@ What's New
 Recent changes — since ``v0.4.0``
 ---------------------------------
 
+TreeView: selecting from code needs pgwidgets-js 0.4.2
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``select_path(path)``, ``select_paths(paths)`` and ``select_all()``
+select, as their signatures say.  Nothing changed on this side: the
+generated proxy forwards only the arguments it was given, so a call
+that leaves ``state`` off sent nothing for it, and the browser used to
+read that as "deselect" -- the row never highlighted,
+``get_subtree('selected')`` stayed empty, and ``select_all()`` cleared
+the selection instead of filling it.  pgwidgets-js 0.4.2 defaults the
+argument, and the dependency floor now requires it.
+
+Dragging a column divider in the browser also resizes just that column
+now, qt-style, instead of taking the width out of the next one, and the
+last column has a divider of its own.
+
 TextSource: scroll alignment and caret styling
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
