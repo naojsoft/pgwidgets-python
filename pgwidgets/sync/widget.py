@@ -15,7 +15,6 @@ from pgwidgets import tree_model
 from pgwidgets.defs import WIDGETS, CALLBACK_METHODS, WIDGET_METHODS, CONTAINER_METHODS
 from pgwidgets.method_types import (
     classify_method, SETTER, GETTER, CHILD, ACTION, JS_ONLY,
-    CHILD_METHODS as CHILD_METHOD_TYPES,
     FIXED_SETTERS, CLEAR_RESETS, ITEM_LIST_CONFIG,
     REPLAY_METHODS, CHILD_SELECT_METHODS, TREE_VIEW_WIDGETS,
     STATE_SYNC_CALLBACKS, STATE_SYNC_REQUIRES_OPTION,
@@ -122,6 +121,10 @@ class Widget:
         # Store constructor info for reconstruction
         self._constructor_args = tuple(args[:len(pos_names)])
         self._constructor_options = dict(options)
+        if self._constructor_options.get("columns") is not None:
+            # the replay record, so keep it safe from the caller's edits
+            self._constructor_options["columns"] = tree_model.copy_tree(
+                self._constructor_options["columns"])
 
         # Store constructor args as initial state (None means "not
         # provided" since generated __init__ defaults all args to None)
@@ -130,6 +133,10 @@ class Widget:
                 self._state[name] = args[i]
         for k, v in options.items():
             if v is not None:
+                # the column list is edited in place later (see
+                # _add_tree_model_methods), so keep a copy of the caller's
+                if k == "columns":
+                    v = tree_model.copy_tree(v)
                 self._state[k] = v
 
         # Apply default state for keys not set by constructor
@@ -655,7 +662,7 @@ def _make_clear(method_name, widget_name):
             self._state.pop(key, None)
         return self._call("clear")
     method.__name__ = "clear"
-    method.__qualname__ = f"Widget.clear"
+    method.__qualname__ = "Widget.clear"
     method.__doc__ = "clear()"
     return method
 
@@ -700,6 +707,7 @@ def _add_item_list_methods(attrs, item_cfg, all_methods):
 
     if append_name and append_name in all_methods:
         param_names = all_methods[append_name]
+
         def make_append(mn, pn):
             def method(self, *args, **kwargs):
                 args = _resolve_kwargs(mn, pn, args, kwargs)
@@ -719,6 +727,7 @@ def _add_item_list_methods(attrs, item_cfg, all_methods):
         # local list matches the browser's order.  Otherwise treat the
         # second arg as an explicit insert index.
         alpha_sort = param_names == ["text"]
+
         def make_insert(mn, pn, alpha):
             def method(self, *args, **kwargs):
                 args = _resolve_kwargs(mn, pn, args, kwargs)
@@ -742,6 +751,7 @@ def _add_item_list_methods(attrs, item_cfg, all_methods):
 
     if delete_name and delete_name in all_methods:
         param_names = all_methods[delete_name]
+
         def make_delete(mn, pn):
             def method(self, *args, **kwargs):
                 args = _resolve_kwargs(mn, pn, args, kwargs)
@@ -767,6 +777,7 @@ def _add_tree_view_methods(attrs, all_methods):
 
     if "sort_by_column" in all_methods:
         param_names = all_methods["sort_by_column"]
+
         def sort_method(self, *args, **kwargs):
             args = _resolve_kwargs("sort_by_column", param_names, args, kwargs)
             col = args[0] if args else 0
@@ -778,6 +789,7 @@ def _add_tree_view_methods(attrs, all_methods):
 
     if "expand_item" in all_methods:
         param_names = all_methods["expand_item"]
+
         def expand_item_method(self, *args, **kwargs):
             args = _resolve_kwargs("expand_item", param_names, args, kwargs)
             path = args[0] if args else None
@@ -795,6 +807,7 @@ def _add_tree_view_methods(attrs, all_methods):
 
     if "collapse_item" in all_methods:
         param_names = all_methods["collapse_item"]
+
         def collapse_item_method(self, *args, **kwargs):
             args = _resolve_kwargs("collapse_item", param_names, args, kwargs)
             path = args[0] if args else None
@@ -885,6 +898,21 @@ def _add_tree_model_methods(attrs, all_methods):
             method.__name__ = mn
             return method
         attrs[name] = make_bulk(name, state_key, all_methods[name])
+
+    # --- columns: also a private copy, since insert/append/delete_column
+    # edit the stored list in place -- without the copy they would edit
+    # the caller's list too.  Unlike the row setters it keeps the styles.
+    if "set_columns" in all_methods:
+        param_names = all_methods["set_columns"]
+
+        def set_columns_method(self, *args, **kwargs):
+            args = _resolve_kwargs("set_columns", param_names, args, kwargs)
+            self._state["columns"] = tree_model.copy_tree(
+                args[0] if args else None)
+            self._user_set_state.add("columns")
+            return self._call("set_columns", *args)
+        set_columns_method.__name__ = "set_columns"
+        attrs["set_columns"] = set_columns_method
 
     # --- per-cell writes fold into the model ---
     if "set_cell" in all_methods:

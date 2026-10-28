@@ -6,8 +6,6 @@ Uses a mock session to capture messages without needing a real
 WebSocket connection.
 """
 
-import json
-from unittest.mock import MagicMock
 
 from pgwidgets.sync.widget import Widget, build_widget_class
 from pgwidgets.defs import WIDGETS

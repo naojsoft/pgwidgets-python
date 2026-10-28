@@ -1,6 +1,32 @@
 What's New
 ==========
 
+Recent changes — since ``v0.4.2``
+---------------------------------
+
+TreeView / TableView: a column can opt out of the header-click sort
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A column descriptor can carry ``"sortable": False`` to take that column
+out of the header-click sort on an otherwise sortable table.  It guards
+against an accidental sort on a column whose values are all equal --
+the sort leaves nothing on screen to show it happened, and the next
+edit in that column re-sorts the rows and makes the edited row jump.
+The flag gates the user's click only, so ``sort_by_column()`` still
+works on an opted-out column.  Nothing changed on this side -- column
+descriptors go to the browser as given -- but the browser honours the
+flag from pgwidgets-js 0.4.3, which the dependency floor now requires.
+
+TreeView / TableView: the column list is a private copy
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``set_columns(columns)`` and the ``columns=`` constructor option now
+keep a copy of the list they are given, as ``set_tree()`` and
+``set_rows()`` already did.  ``insert_column()``, ``append_column()``
+and ``delete_column()`` edit the stored list in place, and before this
+they edited the caller's list along with it; equally, a caller that
+kept editing its own list changed what a reconnect replayed.
+
 Recent changes — since ``v0.4.0``
 ---------------------------------
 

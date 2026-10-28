@@ -94,8 +94,8 @@ def test_base_methods_have_valid_params():
     """WIDGET_METHODS, CALLBACK_METHODS, and CONTAINER_METHODS should
     all have list values."""
     for source_name, methods in [("WIDGET_METHODS", WIDGET_METHODS),
-                                  ("CALLBACK_METHODS", CALLBACK_METHODS),
-                                  ("CONTAINER_METHODS", CONTAINER_METHODS)]:
+                                 ("CALLBACK_METHODS", CALLBACK_METHODS),
+                                 ("CONTAINER_METHODS", CONTAINER_METHODS)]:
         for mname, params in methods.items():
             assert isinstance(params, list), (
                 f"{source_name}.{mname} params is "

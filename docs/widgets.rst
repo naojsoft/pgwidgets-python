@@ -663,6 +663,11 @@ Each column is described by a dict with the following keys:
 - ``editable`` -- whether cells in the column can be edited via
   double-click.
 - ``icon_size`` -- pixel size for icon columns (default 16).
+- ``sortable`` -- ``False`` takes the column out of the header-click
+  sort on a table built with ``sortable=True``.  It can only narrow:
+  ``True`` does not make a column sortable on a table that is not.
+  ``sort_by_column()`` still works on the column.  Needs pgwidgets-js
+  0.4.3.
 
 Tree shape (``set_tree``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^

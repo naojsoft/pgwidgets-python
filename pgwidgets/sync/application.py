@@ -30,10 +30,10 @@ from pgwidgets._json import JsonEncoder
 from pgwidgets.defs import WIDGETS
 from pgwidgets.sync.widget import Widget, build_all_widget_classes
 from pgwidgets.method_types import (
-    SPECIAL_SETTERS, FIXED_SETTERS, CHILD_METHODS as CHILD_METHOD_NAMES,
+    SPECIAL_SETTERS, FIXED_SETTERS,
     STATE_SYNC_CALLBACKS, STATE_SYNC_REQUIRES_OPTION,
     WIDGET_CALLBACK_SYNC, POST_CHILDREN_STATE_KEYS, ITEM_LIST_CONFIG,
-    CHILD_CLOSE_CALLBACKS, REPLAY_METHODS, TREE_VIEW_WIDGETS,
+    CHILD_CLOSE_CALLBACKS,
     TREE_OVERRIDE_REPLAY, colour_batches, JS_ONLY_METHODS,
     coalesce_colour_calls,
     BINARY_STATE_KEYS, _send_binary_auto,
@@ -876,6 +876,7 @@ class Session:
             "method": method,
             "args": list(args),
         }, cls=JsonEncoder)
+
         # Send header + binary as an atomic pair on each connection so
         # they can't be interleaved with other sends from another
         # thread.  The pair is wrapped in a single coroutine.
@@ -1571,7 +1572,6 @@ class Session:
         """Determine which child method a container uses."""
         # Check the widget's definition for which child methods it has
         defn = WIDGETS[parent._js_class]
-        base = defn.get("base")
         methods = defn.get("methods", {})
         if "set_widget" in methods:
             return "set_widget"
@@ -2159,6 +2159,7 @@ class Application:
             self._dispatch(session, do_reconstruct, ())
         else:
             self._logger.info(f"Session {session.id} connected.")
+
             def do_connect():
                 # Replay fonts before the user callback so any widget
                 # the user builds with ``set_font(family, ...)`` sees

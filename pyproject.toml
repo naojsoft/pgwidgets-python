@@ -14,18 +14,21 @@ authors = [
     {name = "PGWidgets Developers"},
 ]
 dependencies = [
-    # TreeView.select_path()/select_paths()/select_all() rely on the
+    # A TreeView/TableView column descriptor's `sortable: False`, which
+    # takes that column out of the header-click sort, is honoured by the
+    # browser side from pgwidgets-js 0.4.3.
+    # (TreeView.select_path()/select_paths()/select_all() rely on the
     # browser side defaulting their `state` argument, since the proxy
-    # forwards only the arguments it was given -- pgwidgets-js 0.4.2.
-    # (TextSource's scroll alignment and set_cursor_style() need the
-    # matching browser-side methods, introduced in pgwidgets-js 0.4.1;
+    # forwards only the arguments it was given -- 0.4.2; TextSource's
+    # scroll alignment and set_cursor_style() need the matching
+    # browser-side methods, introduced in pgwidgets-js 0.4.1;
     # earlier requirements — the incremental TreeView/TableView updates
     # and the "batch" / set_colors protocol messages date to 0.4.0; the
     # TextSource selection/tag-region and tooltip/scroll APIs, Separator,
     # Button.set_hover, ButtonBox.min_button_width, Dialog.set_title to
     # 0.3.4; set_min_size/set_max_size, the dict-tree TreeView, the
     # binary Image protocol, TopLevel window-control options to 0.2.0.)
-    "pgwidgets-js>=0.4.2",
+    "pgwidgets-js>=0.4.3",
     "websockets>=12",
 ]
 keywords = ["widgets", "ui", "gui", "websocket", "browser"]

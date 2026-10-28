@@ -292,7 +292,10 @@ class TestCallbackTracking:
     def test_on_stores_registration(self):
         s = MockSession()
         btn = _make(s, "Button", 1)
-        handler = lambda: None
+
+        def handler():
+            pass
+
         btn.on("activated", handler)
 
         assert "activated" in btn._registered_callbacks
@@ -305,7 +308,10 @@ class TestCallbackTracking:
     def test_add_callback_stores_registration(self):
         s = MockSession()
         btn = _make(s, "Button", 1)
-        handler = lambda w: None
+
+        def handler(w):
+            pass
+
         btn.add_callback("activated", handler)
 
         entries = btn._registered_callbacks["activated"]
@@ -316,7 +322,10 @@ class TestCallbackTracking:
     def test_callback_with_extra_args(self):
         s = MockSession()
         btn = _make(s, "Button", 1)
-        handler = lambda x, y: None
+
+        def handler(x, y):
+            pass
+
         btn.on("activated", handler, "extra1", key="val")
 
         entries = btn._registered_callbacks["activated"]
@@ -327,8 +336,13 @@ class TestCallbackTracking:
     def test_multiple_callbacks_same_action(self):
         s = MockSession()
         btn = _make(s, "Button", 1)
-        h1 = lambda: None
-        h2 = lambda w: None
+
+        def h1():
+            pass
+
+        def h2(w):
+            pass
+
         btn.on("activated", h1)
         btn.add_callback("activated", h2)
 

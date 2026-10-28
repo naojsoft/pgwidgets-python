@@ -140,7 +140,7 @@ class FileBrowser(Callbacks):
 
         # Build the dialog (autoclose=False; we manage closing ourselves)
         self._dialog = W.Dialog(title, [["Cancel", "cancel"],
-                                         [ok_label, "ok"]],
+                                        [ok_label, "ok"]],
                                 autoclose=False, modal=modal,
                                 moveable=True, resizable=True)
         self._dialog.resize(550, 420)
@@ -448,8 +448,8 @@ class FileBrowser(Callbacks):
         """Show a confirmation dialog for overwriting an existing file."""
         W = self._W
         dlg = W.Dialog("Confirm Overwrite",
-                        [["Cancel", "cancel"], ["Overwrite", "ok"]],
-                        autoclose=True, modal=True)
+                       [["Cancel", "cancel"], ["Overwrite", "ok"]],
+                       autoclose=True, modal=True)
         dlg.resize(350, 140)
         dlg.set_spacing(8)
         name = os.path.basename(path)

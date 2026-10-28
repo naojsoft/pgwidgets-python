@@ -142,7 +142,7 @@ def on_session(session):
             content.add_widget(W.Label("Editable:"), 0)
             combo2 = W.ComboBox(editable=True, dropdown_limit=5)
             for c in ["Red", "Orange", "Yellow", "Green", "Blue",
-                       "Indigo", "Violet"]:
+                      "Indigo", "Violet"]:
                 combo2.append_text(c)
             combo2.on("activated",
                       lambda idx, text: lbl.set_text(f"Entered: {text}"))
@@ -417,6 +417,7 @@ def on_session(session):
                     lambda child, idx: lbl.set_text(f"Switched to tab {idx}"))
             add_btn = W.Button("Add Tab")
             tab_counter = [3]
+
             def on_add_tab():
                 tab_counter[0] += 1
                 n = tab_counter[0]
@@ -474,6 +475,7 @@ def on_session(session):
             hbox = W.HBox(spacing=4)
             btn_add = W.Button("Add Row")
             row_counter = [8]
+
             def on_add_row():
                 row_counter[0] += 1
                 table.append_row({

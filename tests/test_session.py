@@ -9,10 +9,10 @@ operation, and can be destroyed.
 import queue
 import threading
 import time
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock
 
 from pgwidgets.sync.application import Application, Session
-from pgwidgets.sync.widget import Widget, build_widget_class
+from pgwidgets.sync.widget import build_widget_class
 from pgwidgets.defs import WIDGETS
 
 
@@ -213,15 +213,23 @@ class TestNoConnectionOperation:
 
     def test_listen_stores_handler_no_connection(self):
         s = self._make_session()
-        handler = lambda *args: None
+
+        def handler(*args):
+            pass
+
         s._listen(1, "activated", handler)
         assert "1:activated" in s._callbacks
         assert handler in s._callbacks["1:activated"]
 
     def test_listen_multiple_handlers(self):
         s = self._make_session()
-        h1 = lambda *args: None
-        h2 = lambda *args: None
+
+        def h1(*args):
+            pass
+
+        def h2(*args):
+            pass
+
         s._listen(1, "activated", h1)
         s._listen(1, "activated", h2)
         assert len(s._callbacks["1:activated"]) == 2
@@ -230,7 +238,10 @@ class TestNoConnectionOperation:
 
     def test_unlisten_removes_handler_no_connection(self):
         s = self._make_session()
-        handler = lambda *args: None
+
+        def handler(*args):
+            pass
+
         s._listen(1, "activated", handler)
         s._unlisten(1, "activated")
         assert "1:activated" not in s._callbacks
@@ -312,7 +323,10 @@ class TestWidgetFactoryNoConnection:
         s = self._make_session_with_widgets()
         W = s.get_widgets()
         btn = W.Button("click")
-        handler = lambda: None
+
+        def handler():
+            pass
+
         btn.on("activated", handler)
         assert "activated" in btn._registered_callbacks
 

@@ -287,6 +287,28 @@ class TestWidgetModel:
         keys = [c['key'] for c in tree._state['columns']]
         assert keys == ['grade', 'seeing', 'note']
 
+    def test_set_columns_copies(self):
+        """The column edits work on the stored list in place, so it must
+        not be the caller's -- in either direction."""
+        s = _make_session()
+        table = s.get_widgets().TableView()
+        cols = [{'label': 'A', 'key': 'a'}]
+        table.set_columns(cols)
+        table.append_column({'label': 'B', 'key': 'b'})
+        assert [c['key'] for c in cols] == ['a']
+        cols[0]['label'] = 'mutated'
+        assert table._state['columns'][0]['label'] == 'A'
+
+    def test_constructor_columns_copies(self):
+        s = _make_session()
+        cols = [{'label': 'A', 'key': 'a'}]
+        table = s.get_widgets().TableView(columns=cols)
+        table.append_column({'label': 'B', 'key': 'b'})
+        assert [c['key'] for c in cols] == ['a']
+        cols[0]['label'] = 'mutated'
+        assert table._state['columns'][0]['label'] == 'A'
+        assert table._constructor_options['columns'][0]['label'] == 'A'
+
     def test_bulk_set_drops_row_level_styles(self):
         """The JS clear() before a bulk load empties the cell/row style
         maps but keeps the column and table layers."""
@@ -462,6 +484,28 @@ class TestReconstruction:
         set_rows, = s.calls('set_rows')
         assert set_rows['args'][0] == [{'a': 'one'}, {'a': 'CHANGED'},
                                        {'a': 'three'}]
+
+    def test_column_edits_survive_reconnect(self):
+        """Constructor columns plus a later edit: the create replays the
+        columns as constructed, then set_columns brings them up to date.
+        Descriptor fields pass through untouched (``sortable: False``
+        opts a column out of the header-click sort, pgwidgets-js 0.4.3)."""
+        s = _make_session()
+        table = s.get_widgets().TableView(
+            columns=[{'label': 'A', 'key': 'a'}], sortable=True)
+        table.append_column({'label': 'Note', 'key': 'note',
+                             'sortable': False})
+
+        s.start_recording()
+        s.reconstruct()
+        s.stop_recording()
+
+        create, = [m for m in s._recorded if m.get('type') == 'create']
+        assert create['args'][0]['columns'] == [{'label': 'A', 'key': 'a'}]
+        set_columns, = s.calls('set_columns')
+        assert set_columns['args'][0] == [
+            {'label': 'A', 'key': 'a'},
+            {'label': 'Note', 'key': 'note', 'sortable': False}]
 
 
 class TestIncrementalUpdateData:

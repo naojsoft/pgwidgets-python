@@ -28,10 +28,10 @@ from pgwidgets_js import get_static_path, get_remote_html
 from pgwidgets._json import JsonEncoder
 from pgwidgets.defs import WIDGETS
 from pgwidgets.method_types import (
-    SPECIAL_SETTERS, FIXED_SETTERS, CHILD_METHODS as CHILD_METHOD_NAMES,
+    SPECIAL_SETTERS, FIXED_SETTERS,
     STATE_SYNC_CALLBACKS, STATE_SYNC_REQUIRES_OPTION,
     WIDGET_CALLBACK_SYNC, POST_CHILDREN_STATE_KEYS, ITEM_LIST_CONFIG,
-    CHILD_CLOSE_CALLBACKS, REPLAY_METHODS, TREE_VIEW_WIDGETS,
+    CHILD_CLOSE_CALLBACKS,
     TREE_OVERRIDE_REPLAY, colour_batches, JS_ONLY_METHODS,
     coalesce_colour_calls,
     BINARY_STATE_KEYS, _send_binary_auto,
@@ -622,7 +622,6 @@ class Session:
                 self._next_wid = js_next
         return result
 
-
     def _push(self, wid, method, *args):
         """Push a silent call to all browsers except the callback source.
         Fire-and-forget: no result is awaited."""
@@ -795,6 +794,7 @@ class Session:
             "method": method,
             "args": list(args),
         }, cls=JsonEncoder)
+
         async def _pair(ws):
             await ws.send(header)
             await ws.send(data)
@@ -1842,6 +1842,7 @@ class Application:
             asyncio.ensure_future(do_reconstruct())
         else:
             self._logger.info(f"Session {session.id} connected.")
+
             async def do_connect():
                 # Replay fonts before the user callback so any
                 # widget the user builds with ``set_font(family,

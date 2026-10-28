@@ -360,6 +360,7 @@ def colour_batches(widget, chunk=COLOUR_BATCH_SIZE):
         batches.append({"cells": cells[i:i + chunk]})
     return batches
 
+
 # Default state values applied when a widget is created without
 # explicitly setting the key (e.g. TextEntry() with no text arg).
 STATE_DEFAULTS = {
@@ -452,11 +453,13 @@ def _index_to_widget(self, index):
         return None
     return self._children[index][0]
 
+
 def _index_of(self, child):
     for i, entry in enumerate(self._children):
         if entry[0] is child:
             return i
     return -1
+
 
 def _dialog_popup(self, x=None, y=None):
     self._state["visible"] = True
@@ -464,19 +467,23 @@ def _dialog_popup(self, x=None, y=None):
         self._state["position"] = (x, y)
     return self._call("popup", x, y)
 
+
 def _get_menu(self, name):
     for entry in self._replay_calls:
         if entry[0] == "add_menu" and entry[1] and entry[1][0] == name:
             return entry[2]
     return None
 
+
 def _menuaction_set_state(self, tf):
     """Alias for MenuAction.set_checked — keeps a single state key."""
     return self.set_checked(tf)
 
+
 def _menuaction_get_state(self):
     """Alias for MenuAction.get_checked — keeps a single state key."""
     return self.get_checked()
+
 
 # Above this size (bytes), set_binary_image switches from the single-
 # frame _send_binary transport to the chunked _send_binary_chunked
@@ -539,6 +546,7 @@ def _image_set_binary_image(self, data, format="jpeg"):
     self._state["binary_image"] = (format, data)
     _send_binary_auto(self._session, self._wid,
                       "set_binary_image", [format], data)
+
 
 # State keys whose value is a (format, bytes) tuple that must be
 # replayed via _send_binary instead of _call during reconstruction.

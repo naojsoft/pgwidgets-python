@@ -7,7 +7,6 @@ of the sync backend in ``test_session.py``.
 """
 
 import logging
-import threading
 
 from pgwidgets.async_.application import Application
 

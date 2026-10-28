@@ -7,11 +7,9 @@ messages to recreate the UI in a newly connected browser.
 """
 
 import threading
-from unittest.mock import MagicMock
 
 from pgwidgets.sync.application import Application, Session
 from pgwidgets.sync.widget import build_all_widget_classes
-from pgwidgets.defs import WIDGETS
 
 
 class RecordingSession(Session):
@@ -103,8 +101,8 @@ class TestReconstructCreation:
     def test_multiple_widgets_create(self):
         s = _make_session()
         W = s.get_widgets()
-        label = W.Label("hi")
-        btn = W.Button("click")
+        W.Label("hi")
+        W.Button("click")
 
         s.start_recording()
         s.reconstruct()
@@ -119,7 +117,7 @@ class TestReconstructCreation:
     def test_constructor_with_options(self):
         s = _make_session()
         W = s.get_widgets()
-        label = W.Label("hello", halign="center")
+        W.Label("hello", halign="center")
 
         s.start_recording()
         s.reconstruct()
@@ -151,7 +149,7 @@ class TestReconstructState:
     def test_state_unchanged_from_constructor_skipped(self):
         s = _make_session()
         W = s.get_widgets()
-        label = W.Label("hello")
+        W.Label("hello")
         # Don't change text — it should not be replayed
 
         s.start_recording()
@@ -228,7 +226,7 @@ class TestReconstructState:
     def test_option_unchanged_from_constructor_skipped(self):
         s = _make_session()
         W = s.get_widgets()
-        label = W.Label("hello", halign="center")
+        W.Label("hello", halign="center")
         # Don't change halign — it should not be replayed
 
         s.start_recording()
@@ -318,7 +316,7 @@ class TestReconstructChildren:
         """Root widgets should not have add_widget calls."""
         s = _make_session()
         W = s.get_widgets()
-        label = W.Label("root")
+        W.Label("root")
 
         s.start_recording()
         s.reconstruct()
@@ -344,7 +342,10 @@ class TestReconstructCallbacks:
         s = _make_session()
         W = s.get_widgets()
         btn = W.Button("click")
-        handler = lambda: None
+
+        def handler():
+            pass
+
         btn.on("activated", handler)
 
         s.start_recording()
@@ -360,7 +361,10 @@ class TestReconstructCallbacks:
         s = _make_session()
         W = s.get_widgets()
         btn = W.Button("click")
-        handler = lambda w: None
+
+        def handler(w):
+            pass
+
         btn.add_callback("activated", handler)
 
         s.start_recording()
@@ -383,7 +387,7 @@ class TestReconstructCallbacks:
 
         listens = self._user_listens(s._recorded)
         assert len(listens) == 2
-        actions = {l["action"] for l in listens}
+        actions = {m["action"] for m in listens}
         assert "activated" in actions
         assert "enter-notify" in actions
 
@@ -391,14 +395,14 @@ class TestReconstructCallbacks:
         """Auto-sync listeners (move, resize) are re-registered for TopLevel."""
         s = _make_session()
         W = s.get_widgets()
-        top = W.TopLevel(title="Test", resizable=True)
+        W.TopLevel(title="Test", resizable=True)
 
         s.start_recording()
         s.reconstruct()
         s.stop_recording()
 
         listens = [m for m in s._recorded if m.get("type") == "listen"]
-        actions = {l["action"] for l in listens}
+        actions = {m["action"] for m in listens}
         assert "move" in actions
         assert "resize" in actions
 
